@@ -18,6 +18,9 @@ __pycache__/
 # Saved drawings (don't upload personal drawings to Git)
 drawings/*.png
 
+# MediaPipe model files (downloaded during setup, too large for Git)
+models/
+
 # IDE
 .idea/
 .vscode/
