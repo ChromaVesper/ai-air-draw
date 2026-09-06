@@ -1,0 +1,24 @@
+# Virtual environment
+.venv/
+venv/
+env/
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# macOS metadata
+.DS_Store
+
+# Environment variables
+.env
+
+# Saved drawings (don't upload personal drawings to Git)
+drawings/*.png
+
+# IDE
+.idea/
+.vscode/
+*.swp
