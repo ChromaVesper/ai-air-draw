@@ -132,11 +132,18 @@ class DrawingCanvas:
         """
         Save the current canvas as a PNG inside the configured drawings folder.
         Returns the full file path of the saved image.
+
+        The drawings folder is always resolved relative to the project root
+        (the parent directory of this file's src/ folder), so the correct
+        folder is used regardless of which directory the user runs from.
         """
-        os.makedirs(config.DRAWINGS_DIR, exist_ok=True)
+        # Project root = parent of src/
+        project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        drawings_dir = os.path.join(project_root, config.DRAWINGS_DIR)
+        os.makedirs(drawings_dir, exist_ok=True)
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         filename = f"drawing_{timestamp}.png"
-        filepath = os.path.join(config.DRAWINGS_DIR, filename)
+        filepath = os.path.join(drawings_dir, filename)
         cv2.imwrite(filepath, self._canvas)
         return filepath
 
