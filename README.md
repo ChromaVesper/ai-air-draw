@@ -1,280 +1,88 @@
-# AI Air Draw ✋🎨
+# AI Air Draw — Revolutionary MS Paint AI Edition ✋🎨🤖
 
-> Draw in the air with your index finger — no mouse, no tablet, just your hand and a webcam.
-
----
-
-## Description
-
-AI Air Draw is a real-time computer-vision application that turns your webcam into a digital drawing board.  
-It detects your hand using MediaPipe, tracks the index fingertip, and lets you paint on a virtual canvas by simply pointing your finger.
-
-**Raise your index finger → draw.**  
-**Lower it → pause.**
+> The world's most advanced touchless digital painting studio — combining the complete feature set of classic Microsoft Paint with futuristic AI computer vision and augmented reality gestures.
 
 ---
 
-## Features
+## 🌟 What's New in the MS Paint AI Edition
 
-- 🖐 Real-time hand tracking via MediaPipe Hands (`mp.solutions.hands`)
-- ✏️ Index-finger drawing with smooth, anti-aliased strokes
-- 🎨 Four drawing colours: Blue, Green, Red, Yellow
-- 🧹 Eraser tool (larger white brush)
-- 🗑 One-key canvas clear
-- 💾 Save drawing as PNG (timestamped filename inside `drawings/`)
-- 📏 Adjustable brush size (`+` / `-`)
-- 📊 Live FPS counter
-- 🔀 Exponential moving-average coordinate smoothing (reduces shaky lines)
-- ⌨️ Full keyboard shortcut support
-- 🖱 Toolbar buttons controllable by fingertip hover
-- 🦴 Hand skeleton overlay on webcam feed
-- 🔵 Fingertip ring indicator (shows drawing/idle state)
-- ⚠️ Graceful error handling — webcam unavailable, frame drops, no hand detected
-
----
-
-## Demo
-
-> _Add a GIF or screenshot here after recording a session._
->
-> ![Demo GIF](assets/demo.gif)
+### 🎨 Complete Classic & Modern MS Paint Suite
+- **16 Precision Vector Shapes:**
+  - Freehand, Line, Bézier Curve (3-point quadratic arc), Rectangle, Rounded Rectangle, Ellipse/Circle, Isosceles Triangle, Right Triangle, Diamond, 5-Point Star, 4-Point Star, Directional Arrow, Heart, Lightning Bolt, Comic Speech Callout, and N-gon Polygon (3 to 12 sides).
+- **Shape Fill Styles:**
+  - Choose between **Outline Only**, **Solid Fill**, or **Outline + Fill** (classic MS Paint styling).
+- **9 Media & Artistic Brushes:**
+  - **Pencil** (crisp 1px pixel-art), **Calligraphy Nib** (45° chisel pen), **Pen** (anti-aliased ballpoint), **Marker** (translucent highlighter), **Crayon** (textured wax chalk), **Spray** (airbrush splatter), **Drip** (gravity paint drops), **Neon** (cyberpunk glowing edges), and **Sparkle** (magic glitter particles).
+- **Color 1 (Foreground) & Color 2 (Background/Fill):**
+  - Dual color slots just like MS Paint! Switch with `TAB` or quick-tap. 16 extended studio swatches with custom color picker support.
+- **Paint Tools:**
+  - 🪣 **Flood Fill (Paint Bucket):** Fills bounded regions instantly.
+  - 🔍 **4x Magnifier Eyedropper Loupe:** Live floating 4x zoom loupe with crosshair, RGB values, and Hex color code readout.
+  - 🔤 **Text Placement Tool:** Click, aim with finger, type text with live cursor preview, and commit with `ENTER`.
+  - 🔲 **Rectangular & Freeform Lasso Selection:** Select arbitrary regions, move, copy, cut, paste, crop, or delete.
+  - ✂️ **Crop to Selection & Transparent Selection Toggle:** Crop canvas directly to active selection or paste with background transparency.
+  - 📐 **View Options:** Toggleable pixel-accurate **Rulers** and subtle **Gridlines**.
 
 ---
 
-## How It Works
-
-```
-Webcam (cv2.VideoCapture)
-  → Flip frame horizontally (mirror effect)
-  → Convert BGR → RGB
-  → MediaPipe hand detection (mp.solutions.hands)
-  → 21 hand landmarks extracted
-  → Landmark #8 = index fingertip
-  → Gesture check: is index finger raised? (gestures.py)
-  → If YES → drawing mode
-  → Smooth fingertip coordinates (exponential moving average)
-  → Draw line on digital canvas (drawing.py)
-  → Blend canvas onto webcam frame (mask non-white pixels)
-  → Overlay toolbar + FPS + mode labels
-  → Display in OpenCV window
-  → Repeat ~30 times per second
-```
+### 🤖 Revolutionary AI Vision Superpowers
+- **AI Auto-Shape Beautifier (`🤖SNAP`):**
+  - Draw rough wobbly shapes in thin air — the AI automatically classifies your stroke geometry (circle, line, rectangle, triangle, arrow) and morphs it into a razor-sharp mathematical vector shape!
+- **AI Real-Time Doodle Classifier ("Quick, Draw!" Engine):**
+  - Live AI vision continuously classifies your artwork in real-time, displaying a floating holographic badge: e.g. `🤖 AI: [🌸 Flower 92%]`, `[⭐ Star 95%]`, `[🏠 House 88%]`, `[❤️ Heart 89%]`, `[🚗 Car 86%]`.
+- **AI Magic Content-Aware Inpainting (`✨INPNT`):**
+  - Select unwanted scribbles or objects, and Navier-Stokes / Telea content-aware inpainting seamlessly restores the canvas texture without leaving blank holes.
+- **AI Edge Art / Coloring Book Mode (`📖BOOK`):**
+  - Converts any photo, webcam snapshot, or drawing into clean, high-contrast coloring book line-art ready for the paint bucket.
+- **Holographic Left-Hand AR Palette (`🔮HOLO`):**
+  - Hold up your non-dominant hand — an interactive circular cyberpunk AR color wheel floats directly over your palm! Tap nodes with your index finger to switch colors on the fly.
+- **3D Depth Pressure-Sensitive Stylus (`🎚️PRES`):**
+  - Push your finger closer to the webcam to naturally increase line thickness and ink saturation in 3D air space.
 
 ---
 
-## Technologies
+## ✋ Air Gestures
 
-| Library | Version | Purpose |
+| Gesture | Pose | Action |
 |---|---|---|
-| Python | 3.9+ | Core language |
-| OpenCV (`opencv-python`) | ≥ 4.8 | Webcam, image ops, display |
-| MediaPipe | 0.10.14 | Hand detection & landmarks |
-| NumPy | ≥ 1.24 | Fast array/canvas operations |
-
-> **Note:** MediaPipe is pinned to **0.10.14**. Version 1.x dropped the `mp.solutions` API
-> and its replacement (Tasks API) is not yet stable on all Mac configurations.
-
----
-
-## Installation
-
-### 1 — Clone / download the project
-
-```bash
-git clone <your-github-url>
-cd "hand drow"
-```
-
-### 2 — Quick setup (recommended)
-
-```bash
-chmod +x setup.sh
-./setup.sh
-```
-
-This script automatically:
-1. Creates a `.venv` virtual environment
-2. Installs all Python dependencies
-3. Downloads the MediaPipe hand-landmarker model from Google's official CDN
-
-### 3 — Manual setup (alternative)
-
-```bash
-# Create virtual environment
-python3 -m venv .venv
-source .venv/bin/activate
-
-# Install dependencies
-pip install -r requirements.txt
-```
-
-> No model download is required for manual setup — `mp.solutions.hands` bundles everything it needs inside the mediapipe package itself.
+| ☝ | **Index Finger Raised** | Draw / Paint / Shape drag |
+| ✌ | **Peace Sign (Index + Middle)** | Eraser |
+| 💉 | **Middle Finger Only** | Eyedropper Loupe (color picker) |
+| 💍 | **Ring Finger Only** | Flood Fill (paint bucket) |
+| ✊ | **Fist** | Pause / Commit Shape |
+| 🤏 | **Pinch (Thumb + Index)** | Dynamic Brush Resize |
+| 🖐 | **Open Hand (Hold 0.6s)** | Clear Canvas |
+| 👍 | **Thumbs Up (Hold 0.4s)** | Save Masterpiece (PNG) |
+| 🔮 | **Open Left Palm** | Holographic AR Color Wheel |
 
 ---
 
-## Running the Project
+## ⌨️ Keyboard Shortcuts
+
+| Key | Function |
+|---|---|
+| `TAB` | Swap active Color 1 & Color 2 |
+| `0` - `6` | Shapes: Freehand, Line, Circle, Rect, Rounded Rect, Tri, Polygon |
+| `F` / `I` / `T` / `U` | Flood Fill, Eyedropper, Text, Select |
+| `M` | Cycle Brush (Pencil → Callig → Pen → Marker → Crayon → Spray → Drip → Neon → Sparkle) |
+| `B` | Toggle AI Auto-Shape Beautifier |
+| `W` | Crop canvas to selection |
+| `G` / `Y` / `K` | Toggle Gridlines / Cycle Symmetry / Cycle Backgrounds |
+| `[` / `]` / `/` | Flip Horizontal / Flip Vertical / Rotate 90° CW |
+| `Z` / `X` / `C` | Undo / Cut (or Redo) / Clear Canvas |
+| `V` | Paste at cursor (or Invert Colors) |
+| `S` / `L` | Save PNG / Load Image |
+| `+` / `-` | Increase / Decrease Brush Size |
+| `Q` / `ESC` | Exit Studio |
+
+---
+
+## 🚀 Quick Start
 
 ```bash
+# 1. Activate Virtual Environment
 source .venv/bin/activate
+
+# 2. Run the Studio
 python src/main.py
 ```
-
-A window titled **AI Air Draw** will open showing your webcam feed with a dark toolbar at the top.
-
----
-
-## Keyboard Controls
-
-| Key | Action |
-|---|---|
-| `Q` or `ESC` | Quit the application |
-| `C` | Clear the canvas |
-| `B` | Switch to Blue |
-| `G` | Switch to Green |
-| `R` | Switch to Red |
-| `Y` | Switch to Yellow |
-| `E` | Activate Eraser |
-| `S` | Save drawing as PNG |
-| `+` or `=` | Increase brush size |
-| `-` | Decrease brush size |
-
----
-
-## How Drawing Works
-
-1. **Coordinate conversion:** MediaPipe returns normalised coordinates (0.0–1.0). We multiply by the frame width/height to get pixel positions.  
-   Example: `pixel_x = int(landmark.x * frame_width)`
-
-2. **Previous-point tracking:** We store the last fingertip position. Every frame in drawing mode, `cv2.line(canvas, prev_point, current_point, color, thickness)` connects them.
-
-3. **Stroke start/stop:** When drawing begins (finger raised), `prev_point` is `None` — we draw a dot. When drawing ends (finger lowered or hand gone), `prev_point` is reset to `None` to prevent jump lines.
-
-4. **Smoothing:** Exponential moving average:  
-   `smooth_x = alpha * raw_x + (1 - alpha) * smooth_x`  
-   Alpha = 0.5 means 50/50 blend of new and old position. Reduces shakiness.
-
----
-
-## How Gesture Detection Works
-
-MediaPipe gives 21 landmarks per hand. Y-coordinates increase **downward** in image space.  
-A raised finger has its tip **above** (smaller Y) than its base knuckle.
-
-**Drawing gesture (index finger up):**
-```
-Landmark 8 (index tip).y  <  Landmark 6 (index PIP knuckle).y
-AND
-Landmark 12 (middle tip).y  ≥  Landmark 10 (middle PIP).y   ← middle finger NOT up
-```
-
-This prevents false triggers when making a peace-sign ✌️.
-
----
-
-## How Colors Work
-
-OpenCV uses **BGR** (Blue-Green-Red), not RGB.  
-All colors are defined centrally in `config.py`:
-
-```python
-COLORS = {
-    "BLUE":   (255, 100,   0),   # B=255, G=100, R=0
-    "GREEN":  (  0, 200,   0),
-    "RED":    (  0,   0, 220),
-    "YELLOW": (  0, 220, 220),
-}
-```
-
-The selected color is passed to `cv2.line()` as the line color.
-
----
-
-## How the Eraser Works
-
-The eraser is simply drawing **white** `(255, 255, 255)` with a larger brush.  
-Since the canvas background is white, painting white looks like erasing.  
-The eraser radius is controlled by `ERASER_SIZE` in `config.py`.
-
----
-
-## Project Structure
-
-```
-hand drow/
-│
-├── src/
-│   ├── main.py          # Entry point — ties everything together
-│   ├── hand_tracker.py  # HandTracker class (MediaPipe mp.solutions.hands wrapper)
-│   ├── drawing.py       # DrawingCanvas class (canvas, lines, save, clear, erase)
-│   ├── gestures.py      # is_index_finger_raised() and helpers
-│   └── config.py        # All configurable values (colours, sizes, paths)
-│
-├── assets/              # Place for demo GIFs and screenshots
-├── drawings/            # Saved PNGs land here (auto-created on first save)
-├── models/              # (gitignored) MediaPipe model files
-│
-├── setup.sh             # One-command setup script
-├── requirements.txt     # Python dependencies
-├── .gitignore
-├── LICENSE
-└── README.md
-```
-
-### File responsibilities
-
-| File | What it does |
-|---|---|
-| `config.py` | Centralised constants — colours (BGR), sizes, paths, camera dims |
-| `hand_tracker.py` | Wraps MediaPipe: initialise, process frame, get landmark, draw skeleton |
-| `gestures.py` | Pure functions: is the index finger raised? is a hand present? |
-| `drawing.py` | White canvas, smooth lines, reset-on-idle, erase, clear, save PNG |
-| `main.py` | Webcam loop, toolbar UI, keyboard handling, blends canvas onto frame |
-
----
-
-## Troubleshooting
-
-### Webcam won't open
-- Grant **Terminal** camera permission: *System Settings → Privacy & Security → Camera*
-- Quit other apps that may have locked the camera (Zoom, FaceTime, Photo Booth)
-- Try `VideoCapture(1)` instead of `VideoCapture(0)` in `main.py`
-
-### `No module named 'mediapipe'`
-- You forgot to activate the virtual environment: `source .venv/bin/activate`
-
-### Mediapipe warnings about "inference feedback manager"
-- These are **harmless** status messages from MediaPipe's internals. The app works normally.
-
-### Very low FPS (< 10)
-- Lower `FRAME_WIDTH` / `FRAME_HEIGHT` in `config.py` (e.g. 640×480 instead of 1280×720)
-- Close other CPU-heavy apps
-
-### Lines appear when not drawing
-- Make sure your **index finger is clearly raised** and **middle finger is down**
-- Try increasing the gap — point the index finger more firmly upward
-
-### Drawing doesn't stop when I lower my finger
-- Increase `DETECTION_CONFIDENCE` in `config.py` to `0.8` for a stricter gesture detector
-
-### Hand not detected at all
-- Improve lighting — face a lamp or sit near a window
-- Make sure your hand is within the camera frame
-
----
-
-## Future Improvements
-
-- ↩️ Undo / Redo support
-- 🔷 Shape recognition (circles, rectangles)
-- ✍️ Handwriting-to-text (OCR)
-- 🤚 Multiple hand support
-- 🎨 Custom colour picker (HSV slider)
-- 🖼 Semi-transparent overlay mode (separate canvas view)
-- 🤖 AI drawing recognition (Google QuickDraw)
-- 📹 Screen recording / GIF export
-
----
-
-## License
-
-MIT — see [LICENSE](LICENSE) for details.

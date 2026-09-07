@@ -1,109 +1,130 @@
 """
-hand_tracker.py
----------------
-Wraps MediaPipe's hand-detection solution in a clean, reusable class.
-Responsibilities:
-  - Initialise MediaPipe Hands once at startup.
-  - Accept a BGR OpenCV frame and return processed landmarks.
-  - Expose a simple helper to get the index-fingertip pixel position.
-  - Handle the 'no hand detected' case gracefully.
+hand_tracker.py  —  AI Air Draw Advanced
+Supports up to 2 hands simultaneously.
+Exposes per-hand landmarks, fingertip positions, and handedness.
 """
 
 import cv2
 import mediapipe as mp
-from typing import Optional, Tuple
+from typing import Optional, Tuple, List
 
-import sys
-import os
+import sys, os
 sys.path.insert(0, os.path.dirname(__file__))
 import config
 
 
 class HandTracker:
-    """Detects and tracks a single hand using MediaPipe Hands."""
+    """
+    Tracks up to 2 hands using MediaPipe Hands.
 
-    # Index-fingertip is landmark 8 in MediaPipe's 21-point hand model.
+    Attributes
+    ----------
+    all_landmarks  : list of NormalizedLandmarkList  (one per hand detected)
+    all_handedness : list of ClassificationList       (one per hand detected)
+    current_landmarks : first hand's landmarks (for backward compat)
+    """
+
     INDEX_FINGER_TIP = 8
 
     def __init__(self) -> None:
-        self._mp_hands = mp.solutions.hands
-        self._mp_draw = mp.solutions.drawing_utils
+        self._mp_hands       = mp.solutions.hands
+        self._mp_draw        = mp.solutions.drawing_utils
         self._mp_draw_styles = mp.solutions.drawing_styles
 
-        # Initialise the MediaPipe Hands solution.
         self.hands = self._mp_hands.Hands(
-            static_image_mode=False,           # Optimised for video (tracks across frames)
-            max_num_hands=config.MAX_NUM_HANDS,
-            min_detection_confidence=config.DETECTION_CONFIDENCE,
-            min_tracking_confidence=config.TRACKING_CONFIDENCE,
+            static_image_mode      = False,
+            max_num_hands          = config.MAX_NUM_HANDS,
+            min_detection_confidence = config.DETECTION_CONFIDENCE,
+            min_tracking_confidence  = config.TRACKING_CONFIDENCE,
         )
 
-        # Holds the most-recently detected landmarks (or None).
-        self.current_landmarks = None
+        self.all_landmarks:  List = []
+        self.all_handedness: List = []
+        self.current_landmarks = None   # first hand (back-compat)
+
+        # Cached frame dimensions (set on first process_frame call)
+        self._fw: int = config.FRAME_WIDTH
+        self._fh: int = config.FRAME_HEIGHT
+
+    # ── Core ─────────────────────────────────────────────────────────────────
 
     def process_frame(self, bgr_frame) -> None:
         """
-        Run MediaPipe on a single BGR frame.
-        Updates self.current_landmarks with the first detected hand's landmarks,
-        or sets it to None if no hand is found.
-
-        Parameters
-        ----------
-        bgr_frame : np.ndarray
-            The raw webcam frame in BGR colour order.
+        Run MediaPipe on the BGR frame.
+        Populates all_landmarks, all_handedness, and current_landmarks.
         """
-        # MediaPipe expects RGB, so convert before processing.
-        rgb_frame = cv2.cvtColor(bgr_frame, cv2.COLOR_BGR2RGB)
+        self._fh, self._fw = bgr_frame.shape[:2]
 
-        # Improve performance: mark the frame as non-writeable before passing it.
-        rgb_frame.flags.writeable = False
-        results = self.hands.process(rgb_frame)
-        rgb_frame.flags.writeable = True
+        rgb = cv2.cvtColor(bgr_frame, cv2.COLOR_BGR2RGB)
+        rgb.flags.writeable = False
+        results = self.hands.process(rgb)
+        rgb.flags.writeable = True
 
         if results.multi_hand_landmarks:
-            # Take only the first detected hand (we configured max_num_hands=1)
-            self.current_landmarks = results.multi_hand_landmarks[0]
+            self.all_landmarks  = results.multi_hand_landmarks
+            self.all_handedness = results.multi_handedness or []
+            self.current_landmarks = self.all_landmarks[0]
         else:
+            self.all_landmarks  = []
+            self.all_handedness = []
             self.current_landmarks = None
 
-    def get_index_fingertip(
-        self, frame_width: int, frame_height: int
-    ) -> Optional[Tuple[int, int]]:
-        """
-        Return the pixel (x, y) coordinates of the index-fingertip landmark.
+    # ── Per-hand helpers ──────────────────────────────────────────────────────
 
-        MediaPipe stores landmark coordinates as normalised fractions (0.0–1.0)
-        relative to the frame dimensions, so we multiply by width/height to get
-        actual pixel positions.
+    def get_hand_count(self) -> int:
+        return len(self.all_landmarks)
 
-        Returns None if no hand is currently detected.
-        """
-        if self.current_landmarks is None:
+    def get_landmarks(self, hand_idx: int = 0):
+        """Return landmark list for hand_idx, or None if not tracked."""
+        if hand_idx >= len(self.all_landmarks):
             return None
+        return self.all_landmarks[hand_idx]
 
-        # Landmark 8 = index fingertip
-        tip = self.current_landmarks.landmark[self.INDEX_FINGER_TIP]
-        x = int(tip.x * frame_width)
-        y = int(tip.y * frame_height)
-        return (x, y)
+    def get_handedness(self, hand_idx: int = 0) -> Optional[str]:
+        """
+        Return 'Left' or 'Right' for given hand index (as seen on the
+        FLIPPED frame, so 'Left' on screen = user's right hand).
+        """
+        if hand_idx >= len(self.all_handedness):
+            return None
+        return self.all_handedness[hand_idx].classification[0].label
 
-    def draw_landmarks(self, frame) -> None:
-        """
-        Overlay the hand skeleton on *frame* in-place.
-        This is purely for visual feedback inside the webcam view.
-        Only draws when a hand is detected.
-        """
-        if self.current_landmarks is None:
+    def get_landmark_pixel(
+        self, landmark_idx: int, hand_idx: int = 0
+    ) -> Optional[Tuple[int, int]]:
+        """Return pixel coords of any landmark for a given hand."""
+        lm_list = self.get_landmarks(hand_idx)
+        if lm_list is None:
+            return None
+        lm = lm_list.landmark[landmark_idx]
+        return (int(lm.x * self._fw), int(lm.y * self._fh))
+
+    def get_index_fingertip(
+        self, frame_width: int = 0, frame_height: int = 0, hand_idx: int = 0
+    ) -> Optional[Tuple[int, int]]:
+        """Return pixel (x, y) of the index fingertip for given hand."""
+        return self.get_landmark_pixel(self.INDEX_FINGER_TIP, hand_idx)
+
+    # ── Drawing ───────────────────────────────────────────────────────────────
+
+    def draw_landmarks(self, frame, hand_idx: int = 0) -> None:
+        """Draw hand skeleton for specified hand onto frame in-place."""
+        lm = self.get_landmarks(hand_idx)
+        if lm is None:
             return
-
         self._mp_draw.draw_landmarks(
-            frame,
-            self.current_landmarks,
+            frame, lm,
             self._mp_hands.HAND_CONNECTIONS,
             self._mp_draw_styles.get_default_hand_landmarks_style(),
             self._mp_draw_styles.get_default_hand_connections_style(),
         )
 
+    def draw_all_landmarks(self, frame) -> None:
+        """Draw skeletons for all detected hands."""
+        for i in range(self.get_hand_count()):
+            self.draw_landmarks(frame, i)
+
+    # ── Cleanup ───────────────────────────────────────────────────────────────
+
     def release(self) -> None:
-        """Free MediaPipe resources."""
         self.hands.close()

@@ -1,55 +1,171 @@
 """
-config.py
----------
-Central configuration file for AI Air Draw.
-Change values here to customize the application without touching other files.
+config.py  —  AI Air Draw  •  Revolutionary MS Paint AI Edition
+All configuration and constants in one place.
 """
 
-# ── Window / Canvas ──────────────────────────────────────────────────────────
-FRAME_WIDTH: int = 1280   # Width of the webcam frame (pixels)
-FRAME_HEIGHT: int = 720   # Height of the webcam frame (pixels)
-CANVAS_WIDTH: int = FRAME_WIDTH
-CANVAS_HEIGHT: int = FRAME_HEIGHT
+# ── Camera & Canvas Dimensions ────────────────────────────────────────────────
+FRAME_WIDTH:  int = 1280
+FRAME_HEIGHT: int = 720
 
-# ── Toolbar ──────────────────────────────────────────────────────────────────
-TOOLBAR_HEIGHT: int = 80          # Height of the top toolbar (pixels)
-BUTTON_WIDTH: int = 120           # Width of each toolbar button
-BUTTON_MARGIN: int = 10           # Gap between buttons
+# ── 3-Row Modern Studio Toolbar ───────────────────────────────────────────────
+TOOLBAR_ROW1_H: int = 46    # Title + AI Guesser badge + Swatches (Col 1 & Col 2) + Status + FPS
+TOOLBAR_ROW2_H: int = 52    # Brushes + Extended MS Paint Shapes + Fill Mode
+TOOLBAR_ROW3_H: int = 52    # Paint Tools + AI Superpowers + Transforms + File/History
+TOOLBAR_HEIGHT: int = TOOLBAR_ROW1_H + TOOLBAR_ROW2_H + TOOLBAR_ROW3_H  # 150 px
 
-# ── Colors ───────────────────────────────────────────────────────────────────
-# Colors are stored as BGR tuples (OpenCV uses BGR, not RGB)
+BTN_W: int = 50   # button width
+BTN_H: int = 40   # button height
+BTN_M: int = 3    # horizontal gap
+
+# ── 16 Extended Studio Colors (BGR) ───────────────────────────────────────────
 COLORS: dict = {
-    "BLUE":   (255, 100,   0),
-    "GREEN":  (  0, 200,   0),
-    "RED":    (  0,   0, 220),
-    "YELLOW": (  0, 220, 220),
+    "BLACK":    (  0,   0,   0),
+    "DKGRAY":   ( 70,  70,  70),
+    "GRAY":     (150, 150, 150),
+    "WHITE":    (255, 255, 255),
+    "RED":      ( 20,  20, 235),
+    "ORANGE":   (  0, 135, 255),
+    "YELLOW":   (  0, 230, 245),
+    "LIME":     ( 30, 240, 100),
+    "GREEN":    (  0, 185,   0),
+    "CYAN":     (245, 220,  10),
+    "SKY":      (245, 160,  40),
+    "BLUE":     (235,  70,  20),
+    "PURPLE":   (210,  30, 150),
+    "PINK":     (190,  80, 255),
+    "MAGENTA":  (170,   0, 230),
+    "BROWN":    ( 35,  65, 125),
 }
+DEFAULT_COLOR_NAME:  str = "BLACK"
+DEFAULT_COLOR2_NAME: str = "WHITE"
 
-# Default drawing color
-DEFAULT_COLOR_NAME: str = "BLUE"
+# ── Brush Settings ────────────────────────────────────────────────────────────
+DEFAULT_BRUSH_SIZE: int = 5
+MIN_BRUSH_SIZE:     int = 1
+MAX_BRUSH_SIZE:     int = 70
+ERASER_SIZE:        int = 45
 
-# ── Brush Sizes ───────────────────────────────────────────────────────────────
-DEFAULT_BRUSH_SIZE: int = 8       # Default pen thickness (pixels)
-ERASER_SIZE: int = 40             # Default eraser radius (pixels)
-MIN_BRUSH_SIZE: int = 2
-MAX_BRUSH_SIZE: int = 40
+# Extended Brush Modes (MS Paint styles + Sci-Fi effects)
+BRUSH_MODES = [
+    "pencil",    # 1px sharp pixel-art pencil
+    "callig",    # Calligraphy chisel nib
+    "pen",       # Smooth ballpoint pen
+    "marker",    # Semi-transparent highlighter
+    "crayon",    # Wax crayon / chalk texture
+    "spray",     # Airbrush spray
+    "drip",      # Paint drip physics
+    "neon",      # Cyberpunk glowing line
+    "sparkle",   # Magic fairy glitter
+]
+BRUSH_LABELS = [
+    "PNCL", "CLIG", "PEN", "MARK", "CRAY", "SPRY", "DRIP", "NEON", "SPRK"
+]
+DEFAULT_BRUSH_MODE: str = "pen"
 
-# ── Smoothing ────────────────────────────────────────────────────────────────
-# Exponential moving-average factor (0 = no movement, 1 = no smoothing)
-SMOOTHING_ALPHA: float = 0.5
+# ── MS Paint Shapes Suite ─────────────────────────────────────────────────────
+SHAPE_TOOLS = [
+    "freehand",  # Freehand drawing
+    "line",      # Straight line
+    "curve",     # Bézier arc curve
+    "rect",      # Rectangle
+    "rndrect",   # Rounded rectangle
+    "circle",    # Ellipse / circle
+    "triangle",  # Equilateral / isosceles triangle
+    "rtriangle", # Right-angle triangle
+    "diamond",   # Diamond / rhombus
+    "star5",     # 5-pointed star
+    "star4",     # 4-pointed star
+    "arrow",     # Directional arrow
+    "heart",     # Heart
+    "lightning", # Lightning bolt
+    "callout",   # Comic speech bubble
+    "polygon",   # Regular N-gon (3 to 12 sides)
+]
 
-# ── MediaPipe ────────────────────────────────────────────────────────────────
-MAX_NUM_HANDS: int = 1            # Track only one hand for simplicity
-DETECTION_CONFIDENCE: float = 0.7
-TRACKING_CONFIDENCE: float = 0.5
+SHAPE_LABELS = [
+    "FREE", "LINE", "CURV", "RECT", "RRCT", "CIRC",
+    "TRI", "RTRI", "DIAM", "STR5", "STR4", "ARRW",
+    "HART", "BOLT", "CALL", "POLY"
+]
+DEFAULT_SHAPE: str = "freehand"
+DEFAULT_POLYGON_SIDES: int = 6
 
-# ── File Paths ────────────────────────────────────────────────────────────────
-DRAWINGS_DIR: str = "drawings"    # Folder where saved PNGs are stored
+# Shape Fill Modes (Outline Only, Solid Fill, Outline + Fill)
+SHAPE_FILL_MODES  = ["outline", "fill", "both"]
+SHAPE_FILL_LABELS = ["OUTLN", "FILL", "BOTH"]
 
-# ── UI Colors (BGR) ──────────────────────────────────────────────────────────
-TOOLBAR_BG_COLOR: tuple = (30, 30, 30)         # Dark toolbar background
-BUTTON_ACTIVE_COLOR: tuple = (70, 130, 180)    # Highlighted button (steel blue)
-BUTTON_INACTIVE_COLOR: tuple = (60, 60, 60)    # Inactive button
-BUTTON_TEXT_COLOR: tuple = (240, 240, 240)     # White text on buttons
-STATUS_TEXT_COLOR: tuple = (220, 220, 220)     # Gray text for status bar
-FPS_TEXT_COLOR: tuple = (0, 255, 100)          # Bright green FPS counter
+# ── MS Paint Special Tools ────────────────────────────────────────────────────
+PAINT_TOOLS = [
+    "fill",       # Flood fill paint bucket
+    "eyedrop",    # Eyedropper with 4x live magnifying loupe
+    "text",       # Text placement tool
+    "select",     # Rectangular selection
+    "lasso",      # Freeform lasso selection
+    "crop",       # Crop to selection
+]
+PAINT_LABELS = [
+    "BUCKET", "LOUPE", "TEXT", "SELECT", "LASSO", "CROP"
+]
+
+# ── Revolutionary AI Superpowers ──────────────────────────────────────────────
+AI_TOOLS = [
+    "ai_snap",      # AI Shape Beautifier (Auto-snap rough sketches to vectors)
+    "ai_inpaint",   # AI Magic Content-Aware Eraser (Telea inpainting)
+    "ai_book",      # AI Edge Art / Coloring Book mode
+    "ai_holo",      # Holographic Left-Hand Floating AR Palette
+    "ai_pressure",  # 3D Depth / Pressure Sensitivity
+]
+AI_LABELS = [
+    "🤖SNAP", "✨INPNT", "📖BOOK", "🔮HOLO", "🎚️PRES"
+]
+
+# ── Symmetry ──────────────────────────────────────────────────────────────────
+SYMMETRY_MODES  = ["none", "mirror_h", "mirror_v", "quad", "radial_4", "radial_8", "radial_12"]
+SYMMETRY_LABELS = ["SY:NO", "SY:LR", "SY:UD", "SY:4", "SY:R4", "SY:R8", "SY:R12"]
+
+# ── Background Presets ────────────────────────────────────────────────────────
+BG_PRESETS = ["white", "black", "grid", "dotgrid", "starfield", "blueprint", "canvas"]
+BG_LABELS  = ["BG:W", "BG:K", "BG:G", "BG:DOT", "BG:STR", "BG:BP", "BG:CANV"]
+
+# ── Canvas View Features ──────────────────────────────────────────────────────
+SHOW_GRIDLINES:  bool = False
+SHOW_RULERS:     bool = False
+TRANSPARENT_SEL: bool = False
+CANVAS_ZOOM:     int  = 1   # 1x, 2x, 3x
+
+# ── Smoothing & Undo Stack ────────────────────────────────────────────────────
+SMOOTHING_ALPHA: float = 0.62
+MAX_UNDO_STEPS:  int   = 40
+
+# ── Particles & Physics ───────────────────────────────────────────────────────
+MAX_PARTICLES:  int = 1200
+CONFETTI_COUNT: int = 240
+
+# ── MediaPipe Hand Tracking ───────────────────────────────────────────────────
+MAX_NUM_HANDS:        int   = 2
+DETECTION_CONFIDENCE: float = 0.72
+TRACKING_CONFIDENCE:  float = 0.55
+
+import os
+
+# ── Paths ─────────────────────────────────────────────────────────────────────
+PROJECT_ROOT: str = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+DRAWINGS_DIR: str = os.path.join(PROJECT_ROOT, "drawings")
+
+# ── UI Theme (BGR) ────────────────────────────────────────────────────────────
+TOOLBAR_BG_COLOR:      tuple = (20,  20,  30)
+TOOLBAR_R2_BG:         tuple = (15,  15,  24)
+TOOLBAR_R3_BG:         tuple = (11,  11,  18)
+BUTTON_ACTIVE_COLOR:   tuple = (170, 115,  30)
+BUTTON_INACTIVE_COLOR: tuple = (40,   40,  54)
+BUTTON_TEXT_COLOR:     tuple = (235, 235, 235)
+BUTTON_TOOL_COLOR:     tuple = (35,   95, 175)
+BUTTON_AI_COLOR:       tuple = (140,  40, 160)   # Purple/Magenta for AI features
+STATUS_TEXT_COLOR:     tuple = (195, 195, 195)
+FPS_TEXT_COLOR:        tuple = (0,   240, 110)
+ACCENT:                tuple = (255, 185,  40)    # Gold
+ACCENT2:               tuple = (110, 210, 255)    # Ice Blue
+SELECTION_COLOR:       tuple = (0,   160, 255)    # Vibrant Orange
+
+SHOW_HUD:            bool = True
+DEFAULT_DARK_CANVAS: bool = False
