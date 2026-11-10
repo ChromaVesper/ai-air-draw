@@ -310,3 +310,295 @@ html, body { width:100%; height:100%; overflow:hidden; background:var(--bg); col
 /* BG btn */
 .bg-btn { background:rgba(0,200,100,0.1); border-color:rgba(0,200,100,0.3); }
 .bg-btn:hover { background:rgba(0,200,100,0.25); }
+
+
+/* ═══════════ LIVE GESTURE HUD STATUS PANEL ═══════════ */
+#gesture-hud {
+  position: absolute;
+  top: 14px;
+  left: 14px;
+  z-index: 25;
+  background: rgba(12, 10, 26, 0.88);
+  border: 1px solid rgba(0, 212, 255, 0.35);
+  border-radius: 12px;
+  padding: 10px 14px;
+  min-width: 200px;
+  backdrop-filter: blur(12px);
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.5), 0 0 15px rgba(0, 212, 255, 0.1);
+  user-select: none;
+  pointer-events: none;
+}
+.hud-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+  padding-bottom: 5px;
+  margin-bottom: 7px;
+}
+.hud-title {
+  font-size: 0.72rem;
+  font-weight: 800;
+  letter-spacing: 1.2px;
+  background: linear-gradient(90deg, #00d4ff, #b400ff);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+.hud-status-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #555;
+  box-shadow: 0 0 6px rgba(0, 0, 0, 0.5);
+}
+.hud-status-dot.active {
+  background: #00ff88;
+  box-shadow: 0 0 8px #00ff88;
+}
+.hud-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 4px;
+  font-size: 0.74rem;
+}
+.hud-label {
+  color: #8899bb;
+}
+.hud-val {
+  color: #ffffff;
+  font-weight: 600;
+}
+.hud-val.highlight {
+  color: #00d4ff;
+  font-weight: 800;
+  letter-spacing: 0.5px;
+}
+.hud-meter-wrap {
+  flex: 1;
+  height: 4px;
+  background: rgba(255, 255, 255, 0.1);
+  border-radius: 2px;
+  overflow: hidden;
+  margin: 0 4px;
+}
+.hud-meter-fill {
+  height: 100%;
+  background: linear-gradient(90deg, #00d4ff, #00ff88);
+  border-radius: 2px;
+  transition: width 0.15s ease;
+}
+.hud-guidance {
+  font-size: 0.68rem;
+  color: #ffaa00;
+  margin-top: 6px;
+  padding-top: 5px;
+  border-top: 1px dashed rgba(255, 255, 255, 0.08);
+  text-align: center;
+  font-style: italic;
+}
+
+/* ═══════════ COMMAND CONFIRMATION OVERLAY (Hold-to-Save HUD) ═══════════ */
+#command-confirm-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 40;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.4);
+  backdrop-filter: blur(4px);
+  pointer-events: none;
+}
+.confirm-card {
+  background: rgba(14, 10, 30, 0.95);
+  border: 2px solid #00d4ff;
+  border-radius: 20px;
+  padding: 24px 36px;
+  text-align: center;
+  box-shadow: 0 0 40px rgba(0, 212, 255, 0.4), 0 0 80px rgba(180, 0, 255, 0.2);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  position: relative;
+}
+.confirm-ring {
+  width: 90px;
+  height: 90px;
+  filter: drop-shadow(0 0 10px rgba(0, 212, 255, 0.8));
+}
+.confirm-icon {
+  font-size: 2.2rem;
+  margin-top: -72px;
+  margin-bottom: 24px;
+}
+.confirm-label {
+  font-size: 1rem;
+  font-weight: 800;
+  color: #00d4ff;
+  letter-spacing: 1px;
+}
+.confirm-countdown {
+  font-size: 1.8rem;
+  font-weight: 900;
+  color: #ffffff;
+}
+.confirm-hint {
+  font-size: 0.75rem;
+  color: #8899bb;
+}
+
+/* ═══════════ CALIBRATION MODAL ═══════════ */
+#calibration-modal {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.7);
+  z-index: 600;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  backdrop-filter: blur(8px);
+}
+.calib-card {
+  background: rgba(16, 12, 34, 0.98);
+  border: 1px solid rgba(0, 212, 255, 0.35);
+  border-radius: 18px;
+  padding: 24px 28px;
+  max-width: 580px;
+  width: 92%;
+  box-shadow: 0 0 60px rgba(0, 0, 0, 0.8), 0 0 30px rgba(0, 212, 255, 0.15);
+}
+.calib-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 4px;
+}
+.calib-header h3 {
+  font-size: 1.15rem;
+  color: #00d4ff;
+}
+.calib-close-btn {
+  background: transparent;
+  border: none;
+  color: #8899bb;
+  font-size: 1.2rem;
+  cursor: pointer;
+  padding: 4px;
+}
+.calib-close-btn:hover { color: #fff; }
+.calib-sub {
+  color: #8899bb;
+  font-size: 0.78rem;
+  margin-bottom: 18px;
+}
+.calib-body {
+  display: flex;
+  gap: 20px;
+  align-items: flex-start;
+  margin-bottom: 20px;
+}
+.calib-tester-pane {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  background: rgba(0, 0, 0, 0.4);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 12px;
+  padding: 10px;
+  width: 230px;
+}
+#calib-canvas {
+  width: 210px;
+  height: 160px;
+  background: #080812;
+  border-radius: 8px;
+}
+#calib-live-status {
+  display: flex;
+  justify-content: space-between;
+  width: 100%;
+  margin-top: 8px;
+  font-size: 0.78rem;
+  font-weight: 700;
+  color: #00d4ff;
+}
+.calib-finger-pills {
+  display: flex;
+  gap: 3px;
+  margin-top: 8px;
+  flex-wrap: wrap;
+  justify-content: center;
+}
+.f-pill {
+  font-size: 0.65rem;
+  padding: 2px 6px;
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.08);
+  color: #8899bb;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+}
+.f-pill.up {
+  background: rgba(0, 255, 136, 0.18);
+  color: #00ff88;
+  border-color: #00ff88;
+}
+.calib-controls-pane {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+.calib-control-row {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.calib-label-wrap {
+  display: flex;
+  justify-content: space-between;
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: #e0e8ff;
+}
+.calib-slider {
+  width: 100%;
+  height: 5px;
+  accent-color: #00d4ff;
+  cursor: pointer;
+}
+.calib-scale {
+  display: flex;
+  justify-content: space-between;
+  font-size: 0.65rem;
+  color: #667799;
+}
+.calib-footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  padding-top: 14px;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+}
+.btn-calib-prim {
+  background: linear-gradient(135deg, #00d4ff, #b400ff);
+  color: #fff;
+  border: none;
+  border-radius: 8px;
+  padding: 8px 18px;
+  font-size: 0.82rem;
+  font-weight: 700;
+  cursor: pointer;
+}
+.btn-calib-sec {
+  background: rgba(255, 255, 255, 0.08);
+  color: #8899bb;
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  border-radius: 8px;
+  padding: 8px 16px;
+  font-size: 0.82rem;
+  cursor: pointer;
+}
+.btn-calib-sec:hover { background: rgba(255, 255, 255, 0.15); color: #fff; }

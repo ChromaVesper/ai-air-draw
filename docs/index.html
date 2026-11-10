@@ -30,11 +30,11 @@
     <p class="cam-sub">Revolutionary MS Paint AI Edition</p>
     <ul class="feature-list">
       <li>🎨 9 Pro Brushes + 16 Precision Vector Shapes</li>
-      <li>✋ Real-Time Touchless Hand Tracking (MediaPipe AI)</li>
-      <li>🤏 Pinch to Draw · ✌️ Peace for Eraser · 🖐 Open to Hover</li>
+      <li>✋ Advanced MediaPipe AI with Multi-Frame Gesture Stabilization</li>
+      <li>🤏 Pinch to Draw · 👆 Index to Move Cursor · ✊ Fist to Stop</li>
+      <li>✌️ Peace for Eraser · 🖐 Open Palm to Hover / Pause</li>
+      <li>🛡️ Protected Save System (1.2s Intentional Hold + 3s Cooldown)</li>
       <li>🔀 4-Way &amp; Radial Symmetry · 8 Creative Canvas Backgrounds</li>
-      <li>🤖 AI Shape Beautifier · Doodle Classifier · Coloring Book</li>
-      <li>🪣 Flood Fill · Eyedropper · Text Tool · Lasso Selection</li>
     </ul>
     <button id="btn-start-cam" class="btn-primary">
       <span>📷</span> Start Live Air Draw (Camera)
@@ -51,7 +51,7 @@
 ══════════════════════════════════════════════════════════ -->
 <div id="app" style="display:none">
 
-  <!-- TOOLBAR ROW 1: Branding, Quick Tools, Draw Mode, Colors, Size, Actions -->
+  <!-- TOOLBAR ROW 1: Branding, Quick Tools, Draw Mode, Colors, Size, Actions, Settings -->
   <div id="toolbar-row1">
     <div class="tb-brand">
       <span class="brand-icon">✋</span>
@@ -118,8 +118,11 @@
       <button class="tb-btn" id="btn-undo" title="Undo (Ctrl+Z)">↩️</button>
       <button class="tb-btn" id="btn-redo" title="Redo (Ctrl+Y)">↪️</button>
       <button class="tb-btn" id="btn-clear" title="Clear Canvas">🗑️</button>
-      <button class="tb-btn" id="btn-save" title="Save PNG (Ctrl+S)">💾</button>
+      <button class="tb-btn" id="btn-save" title="Save PNG (Ctrl+S)">💾 Save</button>
     </div>
+
+    <!-- Calibration / Settings modal trigger -->
+    <button id="btn-calibrate" class="tb-btn" title="Gesture Calibration & Sensitivity Settings">⚙️ Calibration</button>
 
     <!-- Camera toggle -->
     <button id="btn-cam-toggle" class="cam-toggle-btn" title="Toggle Webcam">📷 Camera ON</button>
@@ -233,19 +236,55 @@
     <canvas id="canvas-draw"></canvas>
     <canvas id="canvas-overlay"></canvas>
 
-    <!-- Dwell Ring for Touchless Hand UI clicks -->
-    <svg id="dwell-svg" style="display:none">
-      <circle id="dwell-bg" cx="30" cy="30" r="26" stroke="rgba(255,255,255,0.2)" stroke-width="5" fill="none"/>
-      <circle id="dwell-arc" cx="30" cy="30" r="26" stroke="#00d4ff" stroke-width="5" fill="none"
-              stroke-dasharray="163.4" stroke-dashoffset="163.4"
-              stroke-linecap="round" transform="rotate(-90 30 30)"/>
-    </svg>
+    <!-- LIVE GESTURE HUD STATUS PANEL (Top-Left overlay) -->
+    <div id="gesture-hud">
+      <div class="hud-header">
+        <span class="hud-title">AI AIR VISION</span>
+        <span id="hud-cam-dot" class="hud-status-dot active"></span>
+      </div>
+      <div class="hud-row">
+        <span class="hud-label">Hand:</span>
+        <span id="hud-hand-state" class="hud-val">Searching...</span>
+      </div>
+      <div class="hud-row">
+        <span class="hud-label">Gesture:</span>
+        <span id="hud-gesture-name" class="hud-val highlight">NEUTRAL</span>
+      </div>
+      <div class="hud-row">
+        <span class="hud-label">Confidence:</span>
+        <div class="hud-meter-wrap">
+          <div id="hud-confidence-bar" class="hud-meter-fill" style="width: 0%;"></div>
+        </div>
+        <span id="hud-confidence-val" class="hud-val">0%</span>
+      </div>
+      <div class="hud-row">
+        <span class="hud-label">Mode:</span>
+        <span id="hud-mode-val" class="hud-val">Neutral</span>
+      </div>
+      <div id="hud-guidance" class="hud-guidance">Show hand to camera</div>
+    </div>
+
+    <!-- PROTECTED COMMAND CONFIRMATION OVERLAY (Hold-to-Save HUD) -->
+    <div id="command-confirm-overlay" style="display:none">
+      <div class="confirm-card">
+        <svg class="confirm-ring" width="100" height="100" viewBox="0 0 100 100">
+          <circle cx="50" cy="50" r="42" stroke="rgba(255,255,255,0.15)" stroke-width="8" fill="none"/>
+          <circle id="confirm-arc" cx="50" cy="50" r="42" stroke="#00d4ff" stroke-width="8" fill="none"
+                  stroke-dasharray="263.89" stroke-dashoffset="263.89" stroke-linecap="round"
+                  transform="rotate(-90 50 50)"/>
+        </svg>
+        <div id="confirm-icon" class="confirm-icon">💾</div>
+        <div id="confirm-label" class="confirm-label">HOLD TO SAVE</div>
+        <div id="confirm-countdown" class="confirm-countdown">1.2s</div>
+        <div class="confirm-hint">Release or move hand to cancel</div>
+      </div>
+    </div>
 
     <!-- Virtual Hand Cursor Indicator -->
     <div id="cursor-dot"></div>
   </div>
 
-  <!-- Tracker status bar (bottom-left) -->
+  <!-- Bottom-left status bar (compact) -->
   <div id="tracker-status">
     <span id="tracker-icon">👁️</span>
     <span id="tracker-text">Initializing AI Air Draw...</span>
@@ -253,13 +292,14 @@
 
   <!-- Gesture reference popup (bottom-right toggle) -->
   <div id="gesture-hint" style="display:none">
-    <div class="gesture-title">✋ Hand Gestures</div>
+    <div class="gesture-title">✋ Gesture Reference Guide</div>
     <div class="gesture-row"><span class="g-icon">🤏</span><span><strong>Pinch (Index+Thumb):</strong> Draw Ink</span></div>
-    <div class="gesture-row"><span class="g-icon">🖐</span><span><strong>Open Palm:</strong> Hover / Move Cursor</span></div>
+    <div class="gesture-row"><span class="g-icon">👆</span><span><strong>Index Raised:</strong> Move Cursor (Precision Aim)</span></div>
+    <div class="gesture-row"><span class="g-icon">🖐</span><span><strong>Open Palm:</strong> Hover / Pause Drawing</span></div>
+    <div class="gesture-row"><span class="g-icon">✊</span><span><strong>Fist:</strong> Neutral Safe Stop (No Action)</span></div>
     <div class="gesture-row"><span class="g-icon">✌️</span><span><strong>Peace Sign:</strong> Quick Eraser</span></div>
-    <div class="gesture-row"><span class="g-icon">👍</span><span><strong>Thumbs Up:</strong> Save Artwork</span></div>
-    <div class="gesture-row"><span class="g-icon">🤙</span><span><strong>Ring Finger Up:</strong> Flood Fill</span></div>
-    <div class="gesture-row"><span class="g-icon">✋+✋</span><span><strong>Second Hand:</strong> AR Color Palette</span></div>
+    <div class="gesture-row"><span class="g-icon">👍</span><span><strong>Hold Thumbs Up 1.2s:</strong> Confirm Save PNG</span></div>
+    <div class="gesture-row"><span class="g-icon">✋+✋</span><span><strong>Second Hand:</strong> AR Color Palette Wheel</span></div>
     <button id="btn-close-hint">Close ✕</button>
   </div>
   <button id="btn-show-hint" title="View Gesture Guide">❓ Gestures</button>
@@ -285,6 +325,70 @@
       <button id="picker-fg">Set Color 1 (Stroke)</button>
       <button id="picker-bg">Set Color 2 (Fill)</button>
       <button id="picker-cancel">Cancel</button>
+    </div>
+  </div>
+</div>
+
+<!-- USER GESTURE CALIBRATION & SENSITIVITY MODAL -->
+<div id="calibration-modal" style="display:none">
+  <div class="calib-card">
+    <div class="calib-header">
+      <h3>⚙️ Gesture Calibration &amp; Sensitivity</h3>
+      <button id="btn-close-calib" class="calib-close-btn">✕</button>
+    </div>
+    <p class="calib-sub">Calibrate pinch distance, cursor smoothing, and command hold timers for your environment.</p>
+
+    <div class="calib-body">
+      <!-- Live Interactive Hand Tester -->
+      <div class="calib-tester-pane">
+        <canvas id="calib-canvas" width="220" height="180"></canvas>
+        <div id="calib-live-status">
+          <span id="calib-detected-gesture">NO HAND</span>
+          <span id="calib-confidence">0%</span>
+        </div>
+        <div class="calib-finger-pills">
+          <span id="f-thumb" class="f-pill">Thumb</span>
+          <span id="f-index" class="f-pill">Index</span>
+          <span id="f-middle" class="f-pill">Middle</span>
+          <span id="f-ring" class="f-pill">Ring</span>
+          <span id="f-pinky" class="f-pill">Pinky</span>
+        </div>
+      </div>
+
+      <!-- Controls -->
+      <div class="calib-controls-pane">
+        <div class="calib-control-row">
+          <div class="calib-label-wrap">
+            <label for="calib-pinch-slider">Pinch Sensitivity</label>
+            <span id="calib-pinch-val">Normal</span>
+          </div>
+          <input type="range" id="calib-pinch-slider" min="1" max="5" value="3" class="calib-slider">
+          <div class="calib-scale"><span>Tight (Small pinch)</span><span>Wide (Easy pinch)</span></div>
+        </div>
+
+        <div class="calib-control-row">
+          <div class="calib-label-wrap">
+            <label for="calib-smooth-slider">Cursor Smoothing</label>
+            <span id="calib-smooth-val">Adaptive</span>
+          </div>
+          <input type="range" id="calib-smooth-slider" min="1" max="5" value="3" class="calib-slider">
+          <div class="calib-scale"><span>Instant (Fast)</span><span>Ultra-Smooth (No jitter)</span></div>
+        </div>
+
+        <div class="calib-control-row">
+          <div class="calib-label-wrap">
+            <label for="calib-hold-slider">Command Hold Duration</label>
+            <span id="calib-hold-val">1.2s</span>
+          </div>
+          <input type="range" id="calib-hold-slider" min="8" max="25" value="12" class="calib-slider">
+          <div class="calib-scale"><span>0.8s (Quick)</span><span>2.5s (Very Safe)</span></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="calib-footer">
+      <button id="btn-reset-calib" class="btn-calib-sec">Reset Defaults</button>
+      <button id="btn-save-calib" class="btn-calib-prim">Save Preferences</button>
     </div>
   </div>
 </div>

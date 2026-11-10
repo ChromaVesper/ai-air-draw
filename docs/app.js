@@ -1,13 +1,22 @@
 /**
- * AI Air Draw — Revolutionary MS Paint AI Edition  v3.0
- * Browser-based drawing studio with live MediaPipe Hands AI tracking
- * 9 Brushes · 16 Vector Shapes · AI Tools · Symmetry · Filters
+ * AI Air Draw — Revolutionary MS Paint AI Edition  v4.0
+ * Advanced Gesture Recognition & Protected Interaction Architecture
+ * 
+ * Features:
+ * - Rotation-invariant geometric 3D hand gesture recognition
+ * - Temporal gesture stabilization (5-frame majority voting)
+ * - Protected Hold-to-Save command system (1.2s intentional hold + 3s cooldown)
+ * - Complete elimination of accidental downloads / false triggers
+ * - Adaptive dual-speed EMA cursor smoothing (jitter-free air drawing)
+ * - Live Glassmorphism Gesture HUD status panel
+ * - Interactive Gesture Calibration & Sensitivity settings modal
+ * - 9 Brushes · 16 Vector Shapes · Symmetry · AI Tools · Full Undo/Redo
  */
 
 'use strict';
 
 // ═══════════════════════════════════════════════════════════
-// CONSTANTS & COLOR PALETTE
+// PALETTE & GLOBAL STATE
 // ═══════════════════════════════════════════════════════════
 const PALETTE = [
   '#000000', '#FFFFFF', '#7F7F7F', '#C3C3C3',
@@ -17,20 +26,20 @@ const PALETTE = [
   '#3F48CC', '#7092BE', '#A349A4', '#C8BFE7'
 ];
 
-// Active tool and style states
-let COLOR1 = '#ED1C24';       // Foreground / Stroke (default red)
-let COLOR2 = '#FFFFFF';       // Background / Fill (default white)
+// Active drawing and tool states
+let COLOR1 = '#ED1C24';       // Stroke / Foreground color
+let COLOR2 = '#FFFFFF';       // Fill / Background color
 let BRUSH_SIZE = 8;
 let OPACITY = 1.0;
 let CURRENT_TOOL = 'pen';
 let SHAPE_FILL = 'outline';   // 'outline' | 'fill' | 'both'
 let SYMMETRY = 'none';        // 'none' | 'mirror_h' | 'mirror_v' | 'quad' | 'radial4' | 'radial8'
-let BACKGROUND = 'white';     // 'white' | 'black' | 'grid' | 'dotgrid' | 'stars' | 'blueprint' | 'canvas' | 'gradient'
+let BACKGROUND = 'white';
 let RAINBOW_MODE = false;
 let AI_SNAP_LIVE = false;
 let rainbowHue = 0;
 
-// Stroke & pointer state (shared by mouse, touch, and hand-tracking)
+// Stroke & pointer state
 let isDrawing = false;
 let startX = 0, startY = 0;
 let lastX = 0, lastY = 0;
@@ -42,30 +51,80 @@ let textPending = null;
 const polygonSides = 6;
 const magnifierZoom = 3;
 
-// MediaPipe & Camera state
+// ═══════════════════════════════════════════════════════════
+// CALIBRATION & SENSITIVITY CONFIGURATION (with LocalStorage)
+// ═══════════════════════════════════════════════════════════
+const CONFIG = {
+  pinchSensitivity: 3,        // 1 (tight) to 5 (wide), default 3
+  cursorSmoothing: 3,         // 1 (instant) to 5 (ultra-smooth), default 3
+  holdDurationMs: 1200,       // Duration required to confirm protected commands (ms)
+  saveCooldownMs: 3000        // Mandatory delay before another save can execute (ms)
+};
+
+function loadUserPreferences() {
+  try {
+    const saved = localStorage.getItem('ai_air_draw_config');
+    if (saved) {
+      const parsed = JSON.parse(saved);
+      if (parsed.pinchSensitivity) CONFIG.pinchSensitivity = parsed.pinchSensitivity;
+      if (parsed.cursorSmoothing)  CONFIG.cursorSmoothing  = parsed.cursorSmoothing;
+      if (parsed.holdDurationMs)   CONFIG.holdDurationMs   = parsed.holdDurationMs;
+    }
+  } catch (e) {
+    console.warn('Preferences load error:', e);
+  }
+}
+
+function saveUserPreferences() {
+  try {
+    localStorage.setItem('ai_air_draw_config', JSON.stringify(CONFIG));
+  } catch (e) {
+    console.warn('Preferences save error:', e);
+  }
+}
+
+// ═══════════════════════════════════════════════════════════
+// GESTURE STATE MACHINE & TIMING ENGINE
+// ═══════════════════════════════════════════════════════════
+const GESTURE_STATE = {
+  NO_HAND: 'NO_HAND',
+  NEUTRAL: 'NEUTRAL',
+  HOVER: 'HOVER',
+  DRAWING: 'DRAWING',
+  ERASER: 'ERASER',
+  COMMAND_PENDING: 'COMMAND_PENDING',
+  COMMAND_CONFIRMED: 'COMMAND_CONFIRMED',
+  COOLDOWN: 'COOLDOWN'
+};
+
+let currentGestureState = GESTURE_STATE.NO_HAND;
+let activeGestureName = 'NO_HAND';
+let activeConfidence = 0.0;
+let gestureHistory = [];      // 5-frame temporal buffer
+const GESTURE_HISTORY_SIZE = 5;
+
+// Protected Command Latch (Guarantees zero accidental downloads)
+let commandHoldStartTime = 0;
+let commandCooldownUntil = 0;
+let saveCommandLatched = false; // requires releasing gesture before next save
+
+// Adaptive cursor smoothing
+let smoothCursorX = 0, smoothCursorY = 0;
+let prevRawCursorX = 0, prevRawCursorY = 0;
+let lastFrameTimestamp = performance.now();
+
+// MediaPipe & Camera instance handles
 let handsInstance = null;
 let cameraInstance = null;
 let cameraActive = false;
-let handMode = true;           // whether hand tracking controls cursor/ink
-let pinchWasDown = false;
-let prevGesture = 'hover';
-let gestureDebounceTimer = 0;
-let dwellTarget = null;
-let dwellStart = 0;
-const DWELL_MS = 500;
-const PINCH_THRESH = 0.055;
-const PINCH_RELEASE = 0.082;   // hysteresis prevents flickering at boundary
+let handMode = true;
 
-// Cursor smoothing (Exponential Moving Average)
-let smoothCursorX = 0, smoothCursorY = 0;
-const SMOOTH_ALPHA = 0.45;
-
-// Undo / Redo history stack
+// Undo / Redo history
 const UNDO_MAX = 40;
 let undoStack = [];
 let redoStack = [];
 
-// Canvas elements & rendering contexts
+// Canvas layers
 let canvasBg, ctxBg;
 let canvasDraw, ctxDraw;
 let canvasOverlay, ctxOverlay;
@@ -75,10 +134,12 @@ let canvasW = 0, canvasH = 0;
 // INITIALIZATION
 // ═══════════════════════════════════════════════════════════
 window.addEventListener('DOMContentLoaded', () => {
+  loadUserPreferences();
   buildColorPalette();
   bindCamScreenButtons();
   bindKeyboardShortcuts();
   initColorWheel();
+  initCalibrationControls();
 });
 
 function buildColorPalette() {
@@ -89,7 +150,7 @@ function buildColorPalette() {
     const d = document.createElement('div');
     d.className = 'color-disc';
     d.style.background = hex;
-    d.title = `Left-click: Color 1 (${hex}) | Right-click: Color 2`;
+    d.title = `Color: ${hex} (Left-click: Stroke, Right-click: Fill)`;
     d.addEventListener('click', () => setColor1(hex));
     d.addEventListener('contextmenu', e => { e.preventDefault(); setColor2(hex); });
     container.appendChild(d);
@@ -141,7 +202,7 @@ function initStudio(withCamera) {
     startHandTracking();
   } else {
     handMode = false;
-    setTrackerStatus('Mouse / Touch mode active', '🖱️');
+    updateHUD('Camera Inactive', 'Inactive', 'MOUSE / TOUCH', 1.0, 'Neutral', 'Mouse mode active');
     document.getElementById('btn-cam-toggle').textContent = '📷 Camera OFF';
     document.getElementById('btn-mouse-mode').classList.add('active');
     document.getElementById('btn-hand-mode').classList.remove('active');
@@ -156,7 +217,6 @@ function resizeCanvases() {
   canvasW = studio.clientWidth || window.innerWidth;
   canvasH = studio.clientHeight || (window.innerHeight - 94);
 
-  // Preserve drawing layer contents across resize
   const tempCanvas = document.createElement('canvas');
   tempCanvas.width = canvasW;
   tempCanvas.height = canvasH;
@@ -188,12 +248,10 @@ function debounce(fn, ms) {
 // TOOLBAR & CONTROLS BINDING
 // ═══════════════════════════════════════════════════════════
 function bindToolbarControls() {
-  // Tool selector buttons (both top row and panels)
   document.querySelectorAll('[data-tool]').forEach(btn => {
     btn.addEventListener('click', () => selectTool(btn.dataset.tool));
   });
 
-  // Tab category buttons
   document.querySelectorAll('.tab-btn').forEach(btn => {
     btn.addEventListener('click', () => {
       document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
@@ -204,7 +262,7 @@ function bindToolbarControls() {
     });
   });
 
-  // Size slider — live sync with instant linewidth update
+  // Size slider — live sync
   const sizeSlider = document.getElementById('size-slider');
   const sizeVal = document.getElementById('size-val');
   function onSizeChange(val) {
@@ -223,18 +281,20 @@ function bindToolbarControls() {
     opVal.textContent = e.target.value;
   });
 
-  // Actions
+  // Action buttons (Normal Clickable Actions)
   document.getElementById('btn-undo').addEventListener('click', undo);
   document.getElementById('btn-redo').addEventListener('click', redo);
   document.getElementById('btn-clear').addEventListener('click', clearCanvas);
-  document.getElementById('btn-save').addEventListener('click', saveImage);
+  document.getElementById('btn-save').addEventListener('click', () => {
+    executeExplicitSave('Toolbar button clicked');
+  });
 
-  // Swatches & Custom Color Picker
+  // Color Swatches
   document.getElementById('color1-swatch').addEventListener('click', () => openColorPicker('fg'));
   document.getElementById('color2-swatch').addEventListener('click', () => openColorPicker('bg'));
   document.getElementById('btn-custom-color').addEventListener('click', () => openColorPicker('fg'));
 
-  // Shape fill style toggle
+  // Shape style
   document.querySelectorAll('.sfill-btn').forEach(btn => {
     btn.addEventListener('click', () => {
       document.querySelectorAll('.sfill-btn').forEach(b => b.classList.remove('active'));
@@ -244,7 +304,7 @@ function bindToolbarControls() {
     });
   });
 
-  // AI tools
+  // AI Suite buttons
   document.getElementById('btn-ai-snap').addEventListener('click', runAIShapeSnap);
   document.getElementById('btn-ai-classify').addEventListener('click', runAIDoodleClassifier);
   document.getElementById('btn-ai-coloring').addEventListener('click', runAIColoringBook);
@@ -264,7 +324,7 @@ function bindToolbarControls() {
     if (el) el.addEventListener('click', () => applyFX(fx));
   });
 
-  // Background presets
+  // Canvas backgrounds
   document.querySelectorAll('.bg-btn').forEach(btn => {
     btn.addEventListener('click', () => {
       BACKGROUND = btn.dataset.bg;
@@ -283,25 +343,21 @@ function bindToolbarControls() {
     });
   });
 
-  // Camera on/off toggle
+  // Camera toggle
   document.getElementById('btn-cam-toggle').addEventListener('click', toggleCamera);
 
-  // Input Mode switch (Hand vs Mouse)
+  // Mode toggles
   document.getElementById('btn-hand-mode').addEventListener('click', () => {
     handMode = true;
     document.getElementById('btn-hand-mode').classList.add('active');
     document.getElementById('btn-mouse-mode').classList.remove('active');
-    if (!cameraActive) {
-      startHandTracking();
-    } else {
-      setTrackerStatus('Hand Tracking Mode Active ✋', '✋');
-    }
+    if (!cameraActive) startHandTracking();
   });
   document.getElementById('btn-mouse-mode').addEventListener('click', () => {
     handMode = false;
     document.getElementById('btn-mouse-mode').classList.add('active');
     document.getElementById('btn-hand-mode').classList.remove('active');
-    setTrackerStatus('Mouse / Touch Mode Active', '🖱️');
+    updateHUD('Camera Off', 'Inactive', 'MOUSE MODE', 1.0, 'Neutral', 'Mouse/Touch active');
   });
 
   // Gesture guide drawer
@@ -312,7 +368,11 @@ function bindToolbarControls() {
     document.getElementById('gesture-hint').style.display = 'none';
   });
 
-  // Color picker modal controls
+  // Calibration modal trigger
+  document.getElementById('btn-calibrate').addEventListener('click', openCalibrationModal);
+  document.getElementById('btn-close-calib').addEventListener('click', closeCalibrationModal);
+
+  // Color picker modal buttons
   document.getElementById('picker-fg').addEventListener('click', () => { applyPickedColor('fg'); closeColorPicker(); });
   document.getElementById('picker-bg').addEventListener('click', () => { applyPickedColor('bg'); closeColorPicker(); });
   document.getElementById('picker-cancel').addEventListener('click', closeColorPicker);
@@ -320,35 +380,16 @@ function bindToolbarControls() {
     const el = document.getElementById(id);
     if (el) el.addEventListener('input', updateColorPickerPreview);
   });
-  const hexInput = document.getElementById('phex');
-  if (hexInput) {
-    hexInput.addEventListener('change', e => {
-      const hsl = hexToHsl(e.target.value);
-      if (hsl) {
-        document.getElementById('ph').value = hsl.h;
-        document.getElementById('ps').value = hsl.s;
-        document.getElementById('pl').value = hsl.l;
-        updateColorPickerPreview();
-      }
-    });
-  }
 
-  // Floating text tool cancel button
+  // Floating text tool
   document.getElementById('btn-text-cancel').addEventListener('click', () => {
     document.getElementById('text-input-wrap').style.display = 'none';
     textPending = null;
   });
 
-  // AI Classification result close button
+  // AI Classification close
   document.getElementById('btn-ai-result-close').addEventListener('click', () => {
     document.getElementById('ai-result').style.display = 'none';
-  });
-
-  // Retry AI dynamic button
-  document.addEventListener('click', e => {
-    if (e.target && e.target.id === 'btn-retry-ai') {
-      startHandTracking();
-    }
   });
 }
 
@@ -398,13 +439,13 @@ function getToolCursor(tool) {
 }
 
 // ═══════════════════════════════════════════════════════════
-// SHARED DRAWING ENGINE (Mouse, Touch, and Hand Tracking)
+// SHARED CANVAS DRAWING ENGINE (Isolated from Toolbar Actions)
 // ═══════════════════════════════════════════════════════════
 function bindCanvasPointerEvents() {
   const el = canvasOverlay;
 
   el.addEventListener('mousedown', e => {
-    if (handMode && cameraActive) return; // In hand mode with camera on, ignore physical mouse on canvas
+    if (handMode && cameraActive) return; // In hand mode with camera on, hand gestures own the canvas
     if (e.button === 2) {
       if (CURRENT_TOOL === 'eyedropper') pickColorAt(e.offsetX, e.offsetY, 2);
       return;
@@ -429,7 +470,7 @@ function bindCanvasPointerEvents() {
 
   el.addEventListener('contextmenu', e => e.preventDefault());
 
-  // Mobile touch support
+  // Mobile Touch Support
   el.addEventListener('touchstart', e => {
     e.preventDefault();
     if (handMode && cameraActive) return;
@@ -889,15 +930,12 @@ function applySymmetry(x1, y1, x2, y2) {
   const cx = W / 2, cy = H / 2;
 
   if (SYMMETRY === 'mirror_h' || SYMMETRY === 'quad') {
-    // Vertical axis mirror (Left <-> Right)
     applyBrush(ctxDraw, W - x1, y1, W - x2, y2);
   }
   if (SYMMETRY === 'mirror_v' || SYMMETRY === 'quad') {
-    // Horizontal axis mirror (Top <-> Bottom)
     applyBrush(ctxDraw, x1, H - y1, x2, H - y2);
   }
   if (SYMMETRY === 'quad') {
-    // 4-way diagonal mirror
     applyBrush(ctxDraw, W - x1, H - y1, W - x2, H - y2);
   }
   if (SYMMETRY === 'radial4' || SYMMETRY === 'radial8') {
@@ -1038,6 +1076,698 @@ function applyCrop(x1, y1, x2, y2) {
   ctxDraw.clearRect(0, 0, canvasW, canvasH);
   ctxDraw.putImageData(croppedData, ox, oy);
   showToast('Cropped to selection');
+}
+
+// ═══════════════════════════════════════════════════════════
+// PROTECTED SAVE & DOWNLOAD SYSTEM (ZERO FALSE TRIGGERS)
+// ═══════════════════════════════════════════════════════════
+function executeExplicitSave(reason = 'User command') {
+  const now = performance.now();
+  if (now < commandCooldownUntil) {
+    const remaining = ((commandCooldownUntil - now) / 1000).toFixed(1);
+    showToast(`⏳ Save on cooldown (${remaining}s remaining)`);
+    return;
+  }
+
+  // Lock cooldown for at least 3 seconds
+  commandCooldownUntil = now + CONFIG.saveCooldownMs;
+  saveCommandLatched = true;
+
+  // Execute image merge and file download
+  const merged = document.createElement('canvas');
+  merged.width = canvasW;
+  merged.height = canvasH;
+  const mc = merged.getContext('2d');
+  mc.drawImage(canvasBg, 0, 0);
+  mc.drawImage(canvasDraw, 0, 0);
+
+  merged.toBlob(blob => {
+    if (!blob) return;
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `ai-air-draw-${Date.now()}.png`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+    showToast(`💾 Saved Artwork! (${reason})`);
+  }, 'image/png');
+
+  // Trigger visual confirmed pulse
+  showCommandConfirmationPulse('✅ ARTWORK SAVED');
+}
+
+function showCommandConfirmationPulse(text) {
+  const overlay = document.getElementById('command-confirm-overlay');
+  const label = document.getElementById('confirm-label');
+  const countdown = document.getElementById('confirm-countdown');
+  const icon = document.getElementById('confirm-icon');
+
+  if (overlay && label && countdown && icon) {
+    overlay.style.display = 'flex';
+    icon.textContent = '✅';
+    label.textContent = text;
+    countdown.textContent = 'SAVED';
+    setTimeout(() => {
+      overlay.style.display = 'none';
+      icon.textContent = '💾';
+      label.textContent = 'HOLD TO SAVE';
+    }, 1200);
+  }
+}
+
+// ═══════════════════════════════════════════════════════════
+// ROTATION-INVARIANT 3D GESTURE RECOGNITION ENGINE
+// ═══════════════════════════════════════════════════════════
+function analyzeHandGeometry(lm) {
+  // 1. Compute palm metrics
+  const wrist = lm[0];
+  const middleMcp = lm[9];
+  const palmScale = Math.hypot(middleMcp.x - wrist.x, middleMcp.y - wrist.y);
+
+  if (palmScale < 0.04) {
+    return { valid: false }; // Hand too far or degenerate landmarks
+  }
+
+  // 2. Compute individual finger extension states (Rotation Invariant)
+  // Indices: Thumb: 4, Index: 8, Middle: 12, Ring: 16, Pinky: 20
+  function isFingerExtended(tipIdx, pipIdx, mcpIdx) {
+    const tip = lm[tipIdx];
+    const pip = lm[pipIdx];
+    const mcp = lm[mcpIdx];
+    const distTipWrist = Math.hypot(tip.x - wrist.x, tip.y - wrist.y);
+    const distPipWrist = Math.hypot(pip.x - wrist.x, pip.y - wrist.y);
+    const distTipMcp   = Math.hypot(tip.x - mcp.x, tip.y - mcp.y);
+
+    // Finger is straight when tip is significantly further from wrist and MCP
+    return (distTipWrist > distPipWrist * 1.18) && (distTipMcp > palmScale * 0.65);
+  }
+
+  const indexExtended  = isFingerExtended(8, 6, 5);
+  const middleExtended = isFingerExtended(12, 10, 9);
+  const ringExtended   = isFingerExtended(16, 14, 13);
+  const pinkyExtended  = isFingerExtended(20, 18, 17);
+
+  // 3. Thumb Extension Analysis
+  const thumbTip = lm[4];
+  const thumbIp  = lm[3];
+  const thumbMcp = lm[2];
+  const pinkyMcp = lm[17];
+  const distThumbPinky = Math.hypot(thumbTip.x - pinkyMcp.x, thumbTip.y - pinkyMcp.y);
+  const distIpPinky    = Math.hypot(thumbIp.x - pinkyMcp.x, thumbIp.y - pinkyMcp.y);
+  const thumbExtended  = (distThumbPinky > distIpPinky * 1.15) &&
+                         (Math.hypot(thumbTip.x - thumbMcp.x, thumbTip.y - thumbMcp.y) > palmScale * 0.45);
+
+  // 4. Normalized Pinch Distance (Scale-Invariant)
+  const pinchDistNormalized = Math.hypot(thumbTip.x - lm[8].x, thumbTip.y - lm[8].y) / palmScale;
+
+  // Calibrated Pinch Thresholds
+  // Slider 1 (tight = 0.20) to 5 (wide = 0.36), default 3 = 0.28
+  const calibEnter = 0.16 + (CONFIG.pinchSensitivity * 0.04);
+  const calibExit  = calibEnter + 0.10; // Hysteresis
+
+  const isPinching = isDrawing ? (pinchDistNormalized < calibExit) : (pinchDistNormalized < calibEnter);
+
+  // 5. Thumb-Up Pose Verification (Dedicated for Protected Save)
+  // Must have: Thumb clearly pointing up, all other 4 fingers curled tightly, and upright hand orientation
+  const isUprightThumb = (thumbTip.y < thumbIp.y - 0.03) && (thumbTip.y < wrist.y - 0.12);
+  const otherFingersCurled = (!indexExtended && !middleExtended && !ringExtended && !pinkyExtended);
+  const isProtectedSavePose = isUprightThumb && otherFingersCurled && thumbExtended;
+
+  // 6. Classification Decision Tree
+  let gesture = 'NEUTRAL';
+  let confidence = 0.75;
+
+  if (otherFingersCurled) {
+    if (isProtectedSavePose) gesture = 'SAVE_INTENT';
+    else gesture = 'FIST';
+    confidence = 0.95;
+  } else if (isPinching) {
+    gesture = 'PINCH';
+    confidence = 0.96;
+  } else if (indexExtended && middleExtended && !ringExtended && !pinkyExtended) {
+    gesture = 'PEACE';
+    confidence = 0.92;
+  } else if (indexExtended && !middleExtended && !ringExtended && !pinkyExtended) {
+    gesture = 'INDEX_AIM';
+    confidence = 0.93;
+  } else if (indexExtended && middleExtended && ringExtended && pinkyExtended) {
+    gesture = 'OPEN_PALM';
+    confidence = 0.90;
+  } else {
+    gesture = 'AMBIGUOUS';
+    confidence = 0.60;
+  }
+
+  return {
+    valid: true,
+    gesture,
+    confidence,
+    isPinching,
+    fingers: {
+      thumb: thumbExtended,
+      index: indexExtended,
+      middle: middleExtended,
+      ring: ringExtended,
+      pinky: pinkyExtended
+    },
+    palmScale,
+    thumbTip,
+    indexTip: lm[8]
+  };
+}
+
+// ═══════════════════════════════════════════════════════════
+// TEMPORAL GESTURE STABILIZER & STATE MACHINE
+// ═══════════════════════════════════════════════════════════
+function processStabilizedGestures(landmarks) {
+  const analysis = analyzeHandGeometry(landmarks);
+  if (!analysis.valid) {
+    updateHUD('Camera Active', 'Searching...', 'NO HAND', 0.0, 'Neutral', 'Hand out of view');
+    if (isDrawing) onPointerUp();
+    resetSaveConfirmationHUD();
+    return;
+  }
+
+  // Update calibration tester if modal is open
+  updateCalibrationTester(analysis, landmarks);
+
+  // 1. Maintain 5-frame temporal sliding window
+  gestureHistory.push(analysis.gesture);
+  if (gestureHistory.length > GESTURE_HISTORY_SIZE) {
+    gestureHistory.shift();
+  }
+
+  // 2. Compute majority gesture
+  const counts = {};
+  gestureHistory.forEach(g => { counts[g] = (counts[g] || 0) + 1; });
+  let dominantGesture = analysis.gesture;
+  let maxCount = 0;
+  for (const [g, count] of Object.entries(counts)) {
+    if (count > maxCount) {
+      maxCount = count;
+      dominantGesture = g;
+    }
+  }
+
+  const temporalConsistency = maxCount / gestureHistory.length;
+  activeConfidence = analysis.confidence * temporalConsistency;
+  activeGestureName = dominantGesture;
+
+  // 3. Compute Mirrored Coordinates with Adaptive Low-Pass Filter
+  const now = performance.now();
+  const dt = Math.max(1, (now - lastFrameTimestamp)) / 1000;
+  lastFrameTimestamp = now;
+
+  // Aim point: mid-point of index and thumb tips
+  const rawAimX = (1 - (analysis.indexTip.x + analysis.thumbTip.x) / 2) * canvasW;
+  const rawAimY = ((analysis.indexTip.y + analysis.thumbTip.y) / 2) * canvasH;
+
+  // Adaptive smoothing: high smoothing at low velocity (tremor removal), low smoothing at high velocity (zero lag)
+  const speed = Math.hypot(rawAimX - prevRawCursorX, rawAimY - prevRawCursorY) / dt;
+  prevRawCursorX = rawAimX;
+  prevRawCursorY = rawAimY;
+
+  // Smoothing sensitivity: 1 (fast/0.45) to 5 (ultra-smooth/0.18), default 3 = 0.28
+  const baseAlpha = 0.42 - (CONFIG.cursorSmoothing * 0.05);
+  const adaptiveAlpha = Math.min(0.92, Math.max(baseAlpha, baseAlpha + (speed / 900)));
+
+  smoothCursorX = adaptiveAlpha * rawAimX + (1 - adaptiveAlpha) * smoothCursorX;
+  smoothCursorY = adaptiveAlpha * rawAimY + (1 - adaptiveAlpha) * smoothCursorY;
+
+  // Update visual hand cursor
+  updateVirtualCursor(smoothCursorX, smoothCursorY);
+
+  // 4. Ambiguity Guard: if confidence is low, ignore actions and instruct user
+  if (activeConfidence < 0.68) {
+    updateHUD('Camera Active', 'Detected ✋', dominantGesture, activeConfidence, 'Stabilizing', 'Gesture unclear — hold hand steady');
+    resetSaveConfirmationHUD();
+    return;
+  }
+
+  // 5. Execute Stabilized State Machine
+  executeGestureStateMachine(dominantGesture);
+}
+
+function executeGestureStateMachine(gesture) {
+  const now = performance.now();
+
+  // Reset latch if user releases the save pose
+  if (gesture !== 'SAVE_INTENT') {
+    saveCommandLatched = false;
+    resetSaveConfirmationHUD();
+  }
+
+  switch (gesture) {
+    case 'PINCH':
+      currentGestureState = GESTURE_STATE.DRAWING;
+      updateHUD('Camera Active', 'Detected ✋', 'PINCH (DRAWING)', activeConfidence, 'Draw', 'Drawing ink on canvas');
+      if (!isDrawing) {
+        onPointerDown(smoothCursorX, smoothCursorY);
+      } else {
+        onPointerMove(smoothCursorX, smoothCursorY);
+      }
+      break;
+
+    case 'INDEX_AIM':
+      currentGestureState = GESTURE_STATE.HOVER;
+      if (isDrawing) onPointerUp();
+      updateHUD('Camera Active', 'Detected ✋', 'INDEX (AIMING)', activeConfidence, 'Hover', 'Aiming virtual cursor');
+      break;
+
+    case 'OPEN_PALM':
+      currentGestureState = GESTURE_STATE.HOVER;
+      if (isDrawing) onPointerUp();
+      updateHUD('Camera Active', 'Detected ✋', 'OPEN PALM', activeConfidence, 'Hover', 'Drawing paused / Hovering');
+      break;
+
+    case 'FIST':
+      currentGestureState = GESTURE_STATE.NEUTRAL;
+      if (isDrawing) onPointerUp();
+      updateHUD('Camera Active', 'Detected ✋', 'FIST (NEUTRAL)', activeConfidence, 'Neutral', 'Safe stop / No action');
+      break;
+
+    case 'PEACE':
+      currentGestureState = GESTURE_STATE.ERASER;
+      if (isDrawing) onPointerUp();
+      selectTool('eraser');
+      updateHUD('Camera Active', 'Detected ✋', 'PEACE (ERASER)', activeConfidence, 'Tool', 'Eraser tool selected');
+      break;
+
+    case 'SAVE_INTENT':
+      if (isDrawing) onPointerUp();
+
+      // Check if on cooldown or already latched
+      if (now < commandCooldownUntil) {
+        const remaining = ((commandCooldownUntil - now) / 1000).toFixed(1);
+        updateHUD('Camera Active', 'Detected ✋', 'SAVE (COOLDOWN)', activeConfidence, 'Protected', `Cooldown active (${remaining}s)`);
+        resetSaveConfirmationHUD();
+        return;
+      }
+
+      if (saveCommandLatched) {
+        updateHUD('Camera Active', 'Detected ✋', 'SAVE (LATCHED)', activeConfidence, 'Protected', 'Release gesture before saving again');
+        resetSaveConfirmationHUD();
+        return;
+      }
+
+      // Initiate or progress the intentional 1.2s countdown
+      handleProtectedSaveHold(now);
+      break;
+
+    default:
+      if (isDrawing) onPointerUp();
+      updateHUD('Camera Active', 'Detected ✋', gesture, activeConfidence, 'Neutral', 'Hold steady');
+      break;
+  }
+}
+
+// ═══════════════════════════════════════════════════════════
+// PROTECTED HOLD-TO-SAVE COUNTDOWN ENGINE
+// ═══════════════════════════════════════════════════════════
+function handleProtectedSaveHold(now) {
+  if (commandHoldStartTime === 0) {
+    commandHoldStartTime = now;
+  }
+
+  const elapsed = now - commandHoldStartTime;
+  const progress = Math.min(1.0, elapsed / CONFIG.holdDurationMs);
+  const remaining = Math.max(0, (CONFIG.holdDurationMs - elapsed) / 1000).toFixed(1);
+
+  // Update Live Circular Hold-to-Save HUD
+  const overlay = document.getElementById('command-confirm-overlay');
+  const arc = document.getElementById('confirm-arc');
+  const countdown = document.getElementById('confirm-countdown');
+
+  if (overlay && arc && countdown) {
+    overlay.style.display = 'flex';
+    countdown.textContent = `${remaining}s`;
+    const circumference = 263.89;
+    arc.style.strokeDashoffset = circumference * (1 - progress);
+  }
+
+  updateHUD('Camera Active', 'Detected ✋', 'HOLD TO SAVE', activeConfidence, 'Confirming', `Holding intentional save (${remaining}s)`);
+
+  if (progress >= 1.0) {
+    // Command confirmed! Execute save exactly once
+    resetSaveConfirmationHUD();
+    executeExplicitSave('Held intentional save pose');
+  }
+}
+
+function resetSaveConfirmationHUD() {
+  commandHoldStartTime = 0;
+  const overlay = document.getElementById('command-confirm-overlay');
+  const arc = document.getElementById('confirm-arc');
+  if (overlay) overlay.style.display = 'none';
+  if (arc) arc.style.strokeDashoffset = 263.89;
+}
+
+// ═══════════════════════════════════════════════════════════
+// LIVE GESTURE HUD STATUS PANEL UPDATER
+// ═══════════════════════════════════════════════════════════
+function updateHUD(camText, handText, gestureName, confidence, mode, guidance) {
+  const dot = document.getElementById('hud-cam-dot');
+  const handState = document.getElementById('hud-hand-state');
+  const gestureEl = document.getElementById('hud-gesture-name');
+  const confBar = document.getElementById('hud-confidence-bar');
+  const confVal = document.getElementById('hud-confidence-val');
+  const modeVal = document.getElementById('hud-mode-val');
+  const guidanceEl = document.getElementById('hud-guidance');
+
+  if (dot) dot.className = `hud-status-dot ${cameraActive ? 'active' : ''}`;
+  if (handState) handState.textContent = handText;
+  if (gestureEl) gestureEl.textContent = gestureName;
+
+  const pct = Math.round(confidence * 100);
+  if (confBar) confBar.style.width = `${pct}%`;
+  if (confVal) confVal.textContent = `${pct}%`;
+  if (modeVal) modeVal.textContent = mode;
+  if (guidanceEl) guidanceEl.textContent = guidance;
+
+  // Bottom compact tracker status bar
+  const tText = document.getElementById('tracker-text');
+  const tIcon = document.getElementById('tracker-icon');
+  if (tText) tText.textContent = `${gestureName} · ${guidance}`;
+  if (tIcon) tIcon.textContent = (mode === 'Draw') ? '✏️' : (mode === 'Hover') ? '🖐' : '👁️';
+}
+
+function updateVirtualCursor(x, y) {
+  const dot = document.getElementById('cursor-dot');
+  if (dot) {
+    dot.style.display = 'block';
+    dot.style.left = `${x}px`;
+    dot.style.top  = `${y}px`;
+  }
+}
+
+function hideVirtualCursor() {
+  const dot = document.getElementById('cursor-dot');
+  if (dot) dot.style.display = 'none';
+}
+
+// ═══════════════════════════════════════════════════════════
+// SKELETON & SECONDARY HAND PALETTE
+// ═══════════════════════════════════════════════════════════
+const SKELETON_CONNECTIONS = [
+  [0, 1], [1, 2], [2, 3], [3, 4],
+  [0, 5], [5, 6], [6, 7], [7, 8],
+  [0, 9], [9, 10], [10, 11], [11, 12],
+  [0, 13], [13, 14], [14, 15], [15, 16],
+  [0, 17], [17, 18], [18, 19], [19, 20],
+  [5, 9], [9, 13], [13, 17]
+];
+
+function drawSkeletonOverlay(ctx, landmarks) {
+  ctx.save();
+  ctx.strokeStyle = 'rgba(0, 212, 255, 0.65)';
+  ctx.lineWidth   = 2.2;
+  ctx.lineCap     = 'round';
+
+  function mapLm(lm) {
+    return { x: (1 - lm.x) * canvasW, y: lm.y * canvasH };
+  }
+
+  SKELETON_CONNECTIONS.forEach(([i, j]) => {
+    const p1 = mapLm(landmarks[i]);
+    const p2 = mapLm(landmarks[j]);
+    ctx.beginPath();
+    ctx.moveTo(p1.x, p1.y);
+    ctx.lineTo(p2.x, p2.y);
+    ctx.stroke();
+  });
+
+  ctx.fillStyle = 'rgba(0, 212, 255, 0.95)';
+  landmarks.forEach(lm => {
+    const p = mapLm(lm);
+    ctx.beginPath();
+    ctx.arc(p.x, p.y, 3.5, 0, Math.PI * 2);
+    ctx.fill();
+  });
+
+  ctx.restore();
+}
+
+function drawHolographicPalette(ctx, landmarks) {
+  const palm = { x: (1 - landmarks[0].x) * canvasW, y: landmarks[0].y * canvasH };
+  const paletteRadius = 75;
+  ctx.save();
+
+  const paletteColors = PALETTE.slice(0, 8);
+  paletteColors.forEach((hex, i) => {
+    const ang = (i / paletteColors.length) * Math.PI * 2 - Math.PI / 2;
+    const px = palm.x + paletteRadius * Math.cos(ang);
+    const py = palm.y + paletteRadius * Math.sin(ang);
+
+    ctx.beginPath();
+    ctx.arc(px, py, 14, 0, Math.PI * 2);
+    ctx.fillStyle = hex;
+    ctx.fill();
+    ctx.strokeStyle = '#FFFFFF';
+    ctx.lineWidth = 2.5;
+    ctx.stroke();
+
+    if (Math.hypot(smoothCursorX - px, smoothCursorY - py) < 18) {
+      setColor1(hex);
+      showToast('🎨 Palette selected: ' + hex);
+    }
+  });
+
+  ctx.restore();
+}
+
+// ═══════════════════════════════════════════════════════════
+// MEDIAPIPE HAND TRACKING & WEBCAM PIPELINE
+// ═══════════════════════════════════════════════════════════
+async function startHandTracking() {
+  updateHUD('Starting...', 'Initializing', 'AI BOOT', 0.5, 'Init', 'Connecting camera...');
+
+  try {
+    if (typeof Hands === 'undefined') {
+      throw new Error('MediaPipe Hands library not loaded from CDN.');
+    }
+
+    if (!handsInstance) {
+      handsInstance = new Hands({
+        locateFile: file => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`
+      });
+
+      handsInstance.setOptions({
+        maxNumHands: 2,
+        modelComplexity: 1,
+        minDetectionConfidence: 0.55,
+        minTrackingConfidence: 0.55
+      });
+
+      handsInstance.onResults(onHandResults);
+      await handsInstance.initialize();
+    }
+
+    const videoElement = document.getElementById('webcam');
+    if (!cameraInstance) {
+      cameraInstance = new Camera(videoElement, {
+        onFrame: async () => {
+          if (cameraActive && handsInstance) {
+            try {
+              await handsInstance.send({ image: videoElement });
+            } catch (err) {
+              console.warn('Frame send warning:', err);
+            }
+          }
+        },
+        width: 1280,
+        height: 720
+      });
+    }
+
+    await cameraInstance.start();
+
+    videoElement.style.display = 'block';
+    cameraActive = true;
+    handMode = true;
+
+    document.getElementById('btn-cam-toggle').textContent = '📷 Camera ON';
+    document.getElementById('btn-hand-mode').classList.add('active');
+    document.getElementById('btn-mouse-mode').classList.remove('active');
+
+    updateHUD('Camera Active', 'Searching...', 'WAITING', 0.8, 'Ready', 'Show your hand to camera');
+    showToast('✋ Live Air Draw Active! Pinch to Draw.');
+
+  } catch (err) {
+    console.error('Camera/AI start failure:', err);
+    const isPermDenied = err.name === 'NotAllowedError';
+    const errorText = isPermDenied ? 'Camera permission denied' : (err.message || 'AI initialization error');
+
+    updateHUD('Error', 'Unavailable', 'ERROR', 0.0, 'Fallback', errorText);
+    showToast('⚠️ ' + errorText + ' — using mouse mode');
+    fallbackToMouseMode();
+  }
+}
+
+function onHandResults(results) {
+  if (!cameraActive) return;
+
+  ctxOverlay.clearRect(0, 0, canvasW, canvasH);
+
+  if (!results.multiHandLandmarks || results.multiHandLandmarks.length === 0) {
+    if (isDrawing) onPointerUp();
+    hideVirtualCursor();
+    resetSaveConfirmationHUD();
+    updateHUD('Camera Active', 'No Hand Detected', 'NO HAND', 0.0, 'Neutral', 'Place hand in camera frame');
+    return;
+  }
+
+  // Draw overlay skeleton on primary hand
+  const primaryLandmarks = results.multiHandLandmarks[0];
+  drawSkeletonOverlay(ctxOverlay, primaryLandmarks);
+
+  // Secondary hand activates holographic AR color wheel
+  if (results.multiHandLandmarks.length > 1) {
+    const secondaryLandmarks = results.multiHandLandmarks[1];
+    drawSkeletonOverlay(ctxOverlay, secondaryLandmarks);
+    drawHolographicPalette(ctxOverlay, secondaryLandmarks);
+  }
+
+  if (handMode) {
+    processStabilizedGestures(primaryLandmarks);
+  }
+}
+
+function fallbackToMouseMode() {
+  handMode = false;
+  document.getElementById('btn-mouse-mode').classList.add('active');
+  document.getElementById('btn-hand-mode').classList.remove('active');
+}
+
+function toggleCamera() {
+  if (cameraActive) {
+    const video = document.getElementById('webcam');
+    if (video.srcObject) {
+      video.srcObject.getTracks().forEach(t => t.stop());
+      video.srcObject = null;
+    }
+    video.style.display = 'none';
+    cameraActive = false;
+    handMode = false;
+    if (isDrawing) onPointerUp();
+    ctxOverlay.clearRect(0, 0, canvasW, canvasH);
+    hideVirtualCursor();
+    resetSaveConfirmationHUD();
+    document.getElementById('btn-cam-toggle').textContent = '📷 Camera OFF';
+    updateHUD('Camera Inactive', 'Inactive', 'MOUSE MODE', 1.0, 'Neutral', 'Mouse/Touch active');
+    fallbackToMouseMode();
+  } else {
+    startHandTracking();
+  }
+}
+
+// ═══════════════════════════════════════════════════════════
+// GESTURE CALIBRATION MODAL & TESTER
+// ═══════════════════════════════════════════════════════════
+function initCalibrationControls() {
+  const pinchSlider = document.getElementById('calib-pinch-slider');
+  const smoothSlider = document.getElementById('calib-smooth-slider');
+  const holdSlider = document.getElementById('calib-hold-slider');
+
+  const pinchVal = document.getElementById('calib-pinch-val');
+  const smoothVal = document.getElementById('calib-smooth-val');
+  const holdVal = document.getElementById('calib-hold-val');
+
+  const pinchLabels = ['', 'Very Tight', 'Tight', 'Normal (Default)', 'Wide', 'Very Wide'];
+  const smoothLabels = ['', 'Instant (Low)', 'Responsive', 'Adaptive (Default)', 'Smooth', 'Ultra-Smooth'];
+
+  if (pinchSlider) {
+    pinchSlider.value = CONFIG.pinchSensitivity;
+    pinchVal.textContent = pinchLabels[CONFIG.pinchSensitivity] || 'Normal';
+    pinchSlider.addEventListener('input', e => {
+      CONFIG.pinchSensitivity = parseInt(e.target.value, 10);
+      pinchVal.textContent = pinchLabels[CONFIG.pinchSensitivity];
+    });
+  }
+
+  if (smoothSlider) {
+    smoothSlider.value = CONFIG.cursorSmoothing;
+    smoothVal.textContent = smoothLabels[CONFIG.cursorSmoothing] || 'Adaptive';
+    smoothSlider.addEventListener('input', e => {
+      CONFIG.cursorSmoothing = parseInt(e.target.value, 10);
+      smoothVal.textContent = smoothLabels[CONFIG.cursorSmoothing];
+    });
+  }
+
+  if (holdSlider) {
+    holdSlider.value = Math.round(CONFIG.holdDurationMs / 100);
+    holdVal.textContent = `${(CONFIG.holdDurationMs / 1000).toFixed(1)}s`;
+    holdSlider.addEventListener('input', e => {
+      CONFIG.holdDurationMs = parseInt(e.target.value, 10) * 100;
+      holdVal.textContent = `${(CONFIG.holdDurationMs / 1000).toFixed(1)}s`;
+    });
+  }
+
+  document.getElementById('btn-save-calib').addEventListener('click', () => {
+    saveUserPreferences();
+    closeCalibrationModal();
+    showToast('⚙️ Preferences saved!');
+  });
+
+  document.getElementById('btn-reset-calib').addEventListener('click', () => {
+    CONFIG.pinchSensitivity = 3;
+    CONFIG.cursorSmoothing = 3;
+    CONFIG.holdDurationMs = 1200;
+    if (pinchSlider) { pinchSlider.value = 3; pinchVal.textContent = 'Normal (Default)'; }
+    if (smoothSlider) { smoothSlider.value = 3; smoothVal.textContent = 'Adaptive (Default)'; }
+    if (holdSlider) { holdSlider.value = 12; holdVal.textContent = '1.2s'; }
+    saveUserPreferences();
+    showToast('Reset to default calibration');
+  });
+}
+
+function openCalibrationModal() {
+  document.getElementById('calibration-modal').style.display = 'flex';
+}
+function closeCalibrationModal() {
+  document.getElementById('calibration-modal').style.display = 'none';
+}
+
+function updateCalibrationTester(analysis, lm) {
+  const modal = document.getElementById('calibration-modal');
+  if (!modal || modal.style.display !== 'flex') return;
+
+  const canvas = document.getElementById('calib-canvas');
+  if (!canvas) return;
+  const ctx = canvas.getContext('2d');
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+  // Draw mini hand skeleton
+  ctx.save();
+  ctx.strokeStyle = '#00d4ff';
+  ctx.lineWidth = 1.8;
+  function mapCalib(p) {
+    return { x: (1 - p.x) * canvas.width, y: p.y * canvas.height };
+  }
+  SKELETON_CONNECTIONS.forEach(([i, j]) => {
+    const p1 = mapCalib(lm[i]), p2 = mapCalib(lm[j]);
+    ctx.beginPath();
+    ctx.moveTo(p1.x, p1.y);
+    ctx.lineTo(p2.x, p2.y);
+    ctx.stroke();
+  });
+  ctx.restore();
+
+  // Update pills & labels
+  const gesEl = document.getElementById('calib-detected-gesture');
+  const confEl = document.getElementById('calib-confidence');
+  if (gesEl) gesEl.textContent = analysis.gesture;
+  if (confEl) confEl.textContent = `${Math.round(analysis.confidence * 100)}%`;
+
+  const fingers = ['thumb', 'index', 'middle', 'ring', 'pinky'];
+  fingers.forEach(f => {
+    const pill = document.getElementById(`f-${f}`);
+    if (pill) {
+      if (analysis.fingers[f]) pill.classList.add('up');
+      else pill.classList.remove('up');
+    }
+  });
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -1462,7 +2192,7 @@ function runAIColoringBook() {
       d[i4]     = isEdge ? 0 : 255;
       d[i4 + 1] = isEdge ? 0 : 255;
       d[i4 + 2] = isEdge ? 0 : 255;
-      d[i4 + 3] = isEdge ? 255 : 0; // transparent white, opaque black lines
+      d[i4 + 3] = isEdge ? 255 : 0;
     }
   }
   ctxDraw.putImageData(imgData, 0, 0);
@@ -1528,7 +2258,6 @@ function runAIStyleTransfer() {
     d[i]     = Math.round(d[i] / step) * step;
     d[i + 1] = Math.round(d[i + 1] / step) * step;
     d[i + 2] = Math.round(d[i + 2] / step) * step;
-    // Cyberpunk warm-shift
     d[i]     = Math.min(255, d[i] + 20);
     d[i + 2] = Math.max(0, d[i + 2] - 15);
   }
@@ -1537,7 +2266,7 @@ function runAIStyleTransfer() {
 }
 
 // ═══════════════════════════════════════════════════════════
-// UNDO, REDO, CLEAR & EXPORT
+// UNDO, REDO & CLEAR
 // ═══════════════════════════════════════════════════════════
 function pushUndo() {
   if (!canvasDraw) return;
@@ -1584,421 +2313,6 @@ function clearCanvas() {
   showToast('🗑️ Canvas cleared');
 }
 
-function saveImage() {
-  const merged = document.createElement('canvas');
-  merged.width = canvasW;
-  merged.height = canvasH;
-  const mc = merged.getContext('2d');
-  mc.drawImage(canvasBg, 0, 0);
-  mc.drawImage(canvasDraw, 0, 0);
-
-  merged.toBlob(blob => {
-    if (!blob) return;
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `ai-air-draw-${Date.now()}.png`;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    URL.revokeObjectURL(url);
-    showToast('💾 Saved PNG artwork!');
-  }, 'image/png');
-}
-
-// ═══════════════════════════════════════════════════════════
-// MEDIAPIPE HAND TRACKING & WEBCAM PIPELINE
-// ═══════════════════════════════════════════════════════════
-async function startHandTracking() {
-  setTrackerStatus('Initializing camera & MediaPipe AI...', '⏳');
-
-  try {
-    if (typeof Hands === 'undefined') {
-      throw new Error('MediaPipe Hands library not loaded from CDN.');
-    }
-
-    // 1. Initialize MediaPipe Hands solution
-    if (!handsInstance) {
-      handsInstance = new Hands({
-        locateFile: file => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`
-      });
-
-      handsInstance.setOptions({
-        maxNumHands: 2,
-        modelComplexity: 1,
-        minDetectionConfidence: 0.5,
-        minTrackingConfidence: 0.5
-      });
-
-      handsInstance.onResults(onHandResults);
-      await handsInstance.initialize();
-    }
-
-    // 2. Start webcam stream using MediaPipe CameraUtils
-    const videoElement = document.getElementById('webcam');
-    if (!cameraInstance) {
-      cameraInstance = new Camera(videoElement, {
-        onFrame: async () => {
-          if (cameraActive && handsInstance) {
-            try {
-              await handsInstance.send({ image: videoElement });
-            } catch (err) {
-              console.warn('Frame send warning:', err);
-            }
-          }
-        },
-        width: 1280,
-        height: 720
-      });
-    }
-
-    await cameraInstance.start();
-
-    videoElement.style.display = 'block';
-    cameraActive = true;
-    handMode = true;
-
-    document.getElementById('btn-cam-toggle').textContent = '📷 Camera ON';
-    document.getElementById('btn-hand-mode').classList.add('active');
-    document.getElementById('btn-mouse-mode').classList.remove('active');
-
-    setTrackerStatus('Hand tracking active ✋ (Show your hand)', '✅');
-    showToast('✋ Touchless Hand Tracking Active! Pinch to Draw.');
-
-    const retryBtn = document.getElementById('btn-retry-ai');
-    if (retryBtn) retryBtn.remove();
-
-  } catch (err) {
-    console.error('Camera/AI start failure:', err);
-    const isPermDenied = err.name === 'NotAllowedError';
-    const errorText = isPermDenied
-      ? 'Camera permission denied'
-      : (err.message || 'AI initialization error');
-
-    setTrackerStatus(errorText + ' — Mouse mode active', '⚠️');
-    showToast('⚠️ ' + errorText);
-
-    // Provide immediate Retry AI button
-    const statusBar = document.getElementById('tracker-status');
-    if (statusBar && !document.getElementById('btn-retry-ai')) {
-      const btn = document.createElement('button');
-      btn.id = 'btn-retry-ai';
-      btn.textContent = '🔄 Retry Camera';
-      btn.style.cssText = 'margin-left:8px;padding:3px 8px;border-radius:6px;border:1px solid rgba(0,212,255,0.4);background:rgba(0,212,255,0.2);color:white;cursor:pointer;font-size:0.75rem;';
-      statusBar.appendChild(btn);
-    }
-
-    fallbackToMouseMode();
-  }
-}
-
-function fallbackToMouseMode() {
-  handMode = false;
-  document.getElementById('btn-mouse-mode').classList.add('active');
-  document.getElementById('btn-hand-mode').classList.remove('active');
-}
-
-function toggleCamera() {
-  if (cameraActive) {
-    const video = document.getElementById('webcam');
-    if (video.srcObject) {
-      video.srcObject.getTracks().forEach(t => t.stop());
-      video.srcObject = null;
-    }
-    video.style.display = 'none';
-    cameraActive = false;
-    handMode = false;
-    if (pinchWasDown) {
-      onPointerUp();
-      pinchWasDown = false;
-    }
-    ctxOverlay.clearRect(0, 0, canvasW, canvasH);
-    hideVirtualCursor();
-    document.getElementById('btn-cam-toggle').textContent = '📷 Camera OFF';
-    setTrackerStatus('Camera switched off — Mouse mode', '🖱️');
-    fallbackToMouseMode();
-  } else {
-    startHandTracking();
-  }
-}
-
-// ═══════════════════════════════════════════════════════════
-// HAND LANDMARK & GESTURE PROCESSING
-// ═══════════════════════════════════════════════════════════
-function onHandResults(results) {
-  if (!cameraActive) return;
-
-  ctxOverlay.clearRect(0, 0, canvasW, canvasH);
-
-  if (!results.multiHandLandmarks || results.multiHandLandmarks.length === 0) {
-    if (pinchWasDown) {
-      onPointerUp();
-      pinchWasDown = false;
-    }
-    hideVirtualCursor();
-    setTrackerStatus('No hand detected 👁️', '👁️');
-    return;
-  }
-
-  // Primary drawing hand (first detected hand)
-  const primaryLandmarks = results.multiHandLandmarks[0];
-  drawSkeletonOverlay(ctxOverlay, primaryLandmarks);
-
-  // Secondary hand (if present) activates Holographic AR Color Palette
-  if (results.multiHandLandmarks.length > 1) {
-    const secondaryLandmarks = results.multiHandLandmarks[1];
-    drawSkeletonOverlay(ctxOverlay, secondaryLandmarks);
-    drawHolographicPalette(ctxOverlay, secondaryLandmarks);
-  }
-
-  if (handMode) {
-    processHandGestures(primaryLandmarks);
-  }
-}
-
-function landmarkToCanvas(lm) {
-  // Mirror X so user movements match front selfie camera naturally
-  return {
-    x: (1 - lm.x) * canvasW,
-    y: lm.y * canvasH,
-    z: lm.z
-  };
-}
-
-function processHandGestures(lm) {
-  const tip4  = landmarkToCanvas(lm[4]);   // Thumb Tip
-  const tip8  = landmarkToCanvas(lm[8]);   // Index Finger Tip
-  const tip12 = landmarkToCanvas(lm[12]);  // Middle Finger Tip
-  const tip16 = landmarkToCanvas(lm[16]);  // Ring Finger Tip
-  const tip20 = landmarkToCanvas(lm[20]);  // Pinky Finger Tip
-
-  const pip8  = landmarkToCanvas(lm[6]);   // Index PIP
-  const pip12 = landmarkToCanvas(lm[10]);  // Middle PIP
-  const pip16 = landmarkToCanvas(lm[14]);  // Ring PIP
-  const pip20 = landmarkToCanvas(lm[18]);  // Pinky PIP
-  const mcp4  = landmarkToCanvas(lm[2]);   // Thumb MCP
-
-  // Finger extended states (higher up on screen has smaller Y)
-  const indexUp  = tip8.y  < pip8.y;
-  const middleUp = tip12.y < pip12.y;
-  const ringUp   = tip16.y < pip16.y;
-  const pinkyUp  = tip20.y < pip20.y;
-  const thumbUp  = tip4.y  < mcp4.y - 15;
-
-  // Raw pinch distance in normalized space
-  const pinchDist = Math.hypot(lm[4].x - lm[8].x, lm[4].y - lm[8].y);
-
-  // Position cursor halfway between thumb and index tip
-  const rawCursorX = (tip8.x + tip4.x) / 2;
-  const rawCursorY = (tip8.y + tip4.y) / 2;
-
-  // Exponential Moving Average filter to eliminate hand tremors
-  smoothCursorX = SMOOTH_ALPHA * rawCursorX + (1 - SMOOTH_ALPHA) * smoothCursorX;
-  smoothCursorY = SMOOTH_ALPHA * rawCursorY + (1 - SMOOTH_ALPHA) * smoothCursorY;
-
-  updateVirtualCursor(smoothCursorX, smoothCursorY);
-
-  // Gesture classification with hysteresis
-  let gesture = 'hover';
-
-  if (indexUp && middleUp && !ringUp && !pinkyUp) {
-    gesture = 'peace';           // ✌️ Peace sign -> Eraser
-  } else if (!indexUp && !middleUp && !ringUp && !pinkyUp && thumbUp) {
-    gesture = 'thumbsup';        // 👍 Thumbs Up -> Save PNG
-  } else if (ringUp && !indexUp && !middleUp) {
-    gesture = 'ring';            // 🤙 Ring finger -> Flood fill
-  } else if (pinchDist < (pinchWasDown ? PINCH_RELEASE : PINCH_THRESH)) {
-    gesture = 'pinch';           // 🤏 Pinch -> Draw / Ink
-  }
-
-  // Execute gesture behavior
-  if (gesture === 'pinch') {
-    setTrackerStatus('Drawing ✏️', '🤏');
-    hideDwellRing();
-    if (!pinchWasDown) {
-      onPointerDown(smoothCursorX, smoothCursorY);
-      pinchWasDown = true;
-    } else {
-      onPointerMove(smoothCursorX, smoothCursorY);
-    }
-  } else {
-    if (pinchWasDown) {
-      onPointerUp();
-      pinchWasDown = false;
-    }
-
-    const now = Date.now();
-    if (gesture === 'peace') {
-      selectTool('eraser');
-      setTrackerStatus('Eraser Tool Active ✌️', '✌️');
-      hideDwellRing();
-    } else if (gesture === 'thumbsup') {
-      if (prevGesture !== 'thumbsup' && (now - gestureDebounceTimer) > 1200) {
-        saveImage();
-        gestureDebounceTimer = now;
-      }
-      setTrackerStatus('Artwork Saved! 👍', '💾');
-      hideDwellRing();
-    } else if (gesture === 'ring') {
-      if (prevGesture !== 'ring' && (now - gestureDebounceTimer) > 800) {
-        floodFill(smoothCursorX, smoothCursorY);
-        gestureDebounceTimer = now;
-      }
-      setTrackerStatus('Bucket Fill 🪣', '🪣');
-      hideDwellRing();
-    } else {
-      setTrackerStatus('Hovering (Move Hand) 🖐', '🖐');
-      checkDwellClick(smoothCursorX, smoothCursorY);
-    }
-  }
-
-  prevGesture = gesture;
-}
-
-// ═══════════════════════════════════════════════════════════
-// SKELETON & HOLOGRAPHIC COLOR PALETTE OVERLAYS
-// ═══════════════════════════════════════════════════════════
-const SKELETON_CONNECTIONS = [
-  [0, 1], [1, 2], [2, 3], [3, 4],
-  [0, 5], [5, 6], [6, 7], [7, 8],
-  [0, 9], [9, 10], [10, 11], [11, 12],
-  [0, 13], [13, 14], [14, 15], [15, 16],
-  [0, 17], [17, 18], [18, 19], [19, 20],
-  [5, 9], [9, 13], [13, 17]
-];
-
-function drawSkeletonOverlay(ctx, landmarks) {
-  ctx.save();
-  ctx.strokeStyle = 'rgba(0, 212, 255, 0.65)';
-  ctx.lineWidth   = 2.2;
-  ctx.lineCap     = 'round';
-
-  SKELETON_CONNECTIONS.forEach(([i, j]) => {
-    const p1 = landmarkToCanvas(landmarks[i]);
-    const p2 = landmarkToCanvas(landmarks[j]);
-    ctx.beginPath();
-    ctx.moveTo(p1.x, p1.y);
-    ctx.lineTo(p2.x, p2.y);
-    ctx.stroke();
-  });
-
-  ctx.fillStyle = 'rgba(0, 212, 255, 0.95)';
-  landmarks.forEach(lm => {
-    const p = landmarkToCanvas(lm);
-    ctx.beginPath();
-    ctx.arc(p.x, p.y, 3.5, 0, Math.PI * 2);
-    ctx.fill();
-  });
-
-  ctx.restore();
-}
-
-function drawHolographicPalette(ctx, landmarks) {
-  const palm = landmarkToCanvas(landmarks[0]);
-  const paletteRadius = 75;
-  ctx.save();
-
-  const paletteColors = PALETTE.slice(0, 8);
-  paletteColors.forEach((hex, i) => {
-    const ang = (i / paletteColors.length) * Math.PI * 2 - Math.PI / 2;
-    const px = palm.x + paletteRadius * Math.cos(ang);
-    const py = palm.y + paletteRadius * Math.sin(ang);
-
-    ctx.beginPath();
-    ctx.arc(px, py, 14, 0, Math.PI * 2);
-    ctx.fillStyle = hex;
-    ctx.fill();
-    ctx.strokeStyle = '#FFFFFF';
-    ctx.lineWidth = 2.5;
-    ctx.stroke();
-
-    // Check if primary hand cursor intersects this swatch
-    if (Math.hypot(smoothCursorX - px, smoothCursorY - py) < 18) {
-      setColor1(hex);
-      showToast('🎨 Palette selected: ' + hex);
-    }
-  });
-
-  ctx.restore();
-}
-
-// ═══════════════════════════════════════════════════════════
-// DWELL-CLICK INTERACTION (Touchless UI Control)
-// ═══════════════════════════════════════════════════════════
-function checkDwellClick(cursorX, cursorY) {
-  const clickableButtons = document.querySelectorAll('.tb-btn, .tab-btn, .ai-btn, .color-disc');
-  let closestBtn = null;
-  let minDistance = 45;
-
-  clickableButtons.forEach(btn => {
-    const rect = btn.getBoundingClientRect();
-    const bx = rect.left + rect.width / 2;
-    const by = rect.top + rect.height / 2;
-    const dist = Math.hypot(cursorX - bx, cursorY - by);
-    if (dist < minDistance) {
-      minDistance = dist;
-      closestBtn = btn;
-    }
-  });
-
-  if (closestBtn) {
-    if (dwellTarget !== closestBtn) {
-      dwellTarget = closestBtn;
-      dwellStart  = performance.now();
-      showDwellRing(cursorX, cursorY);
-    } else {
-      const elapsed  = performance.now() - dwellStart;
-      const progress = Math.min(elapsed / DWELL_MS, 1);
-      updateDwellRing(cursorX, cursorY, progress);
-      if (progress >= 1) {
-        closestBtn.click();
-        dwellTarget = null;
-        hideDwellRing();
-        showToast('👆 Selected: ' + (closestBtn.title || closestBtn.textContent.trim()));
-      }
-    }
-  } else {
-    dwellTarget = null;
-    hideDwellRing();
-  }
-}
-
-function showDwellRing(x, y) {
-  const svg = document.getElementById('dwell-svg');
-  if (svg) {
-    svg.style.display = 'block';
-    svg.style.left = (x - 30) + 'px';
-    svg.style.top  = (y - 30) + 'px';
-  }
-}
-function updateDwellRing(x, y, progress) {
-  const svg = document.getElementById('dwell-svg');
-  const arc = document.getElementById('dwell-arc');
-  if (svg && arc) {
-    svg.style.left = (x - 30) + 'px';
-    svg.style.top  = (y - 30) + 'px';
-    arc.style.strokeDashoffset = 163.4 * (1 - progress);
-  }
-}
-function hideDwellRing() {
-  const svg = document.getElementById('dwell-svg');
-  if (svg) svg.style.display = 'none';
-}
-
-function updateVirtualCursor(x, y) {
-  const dot = document.getElementById('cursor-dot');
-  if (dot) {
-    dot.style.display = 'block';
-    dot.style.left = x + 'px';
-    dot.style.top  = y + 'px';
-  }
-}
-
-function hideVirtualCursor() {
-  const dot = document.getElementById('cursor-dot');
-  if (dot) dot.style.display = 'none';
-}
-
 // ═══════════════════════════════════════════════════════════
 // KEYBOARD SHORTCUTS
 // ═══════════════════════════════════════════════════════════
@@ -2012,7 +2326,7 @@ function bindKeyboardShortcuts() {
       switch (e.key.toLowerCase()) {
         case 'z': e.preventDefault(); undo(); break;
         case 'y': e.preventDefault(); redo(); break;
-        case 's': e.preventDefault(); saveImage(); break;
+        case 's': e.preventDefault(); executeExplicitSave('Ctrl+S keyboard shortcut'); break;
       }
       return;
     }
@@ -2046,7 +2360,7 @@ function bindKeyboardShortcuts() {
 }
 
 // ═══════════════════════════════════════════════════════════
-// UI NOTIFICATIONS & STATUS BAR
+// UI TOAST NOTIFICATIONS
 // ═══════════════════════════════════════════════════════════
 let toastTimeoutId = null;
 
@@ -2059,11 +2373,4 @@ function showToast(message) {
   toastTimeoutId = setTimeout(() => {
     toast.classList.remove('visible');
   }, 2500);
-}
-
-function setTrackerStatus(text, icon) {
-  const t = document.getElementById('tracker-text');
-  const i = document.getElementById('tracker-icon');
-  if (t) t.textContent = text;
-  if (i) i.textContent = icon;
 }
