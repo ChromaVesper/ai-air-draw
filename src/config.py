@@ -1,56 +1,76 @@
 """
-config.py  —  AI Air Draw  •  Revolutionary MS Paint AI Edition
+config.py  —  AI Air Draw  •  Easy & Revolutionary MS Paint AI Edition
 All configuration and constants in one place.
 """
+
+import os
+
+# ── Paths ─────────────────────────────────────────────────────────────────────
+PROJECT_ROOT: str = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+DRAWINGS_DIR: str = os.path.join(PROJECT_ROOT, "drawings")
 
 # ── Camera & Canvas Dimensions ────────────────────────────────────────────────
 FRAME_WIDTH:  int = 1280
 FRAME_HEIGHT: int = 720
 
-# ── 3-Row Modern Studio Toolbar ───────────────────────────────────────────────
-TOOLBAR_ROW1_H: int = 46    # Title + AI Guesser badge + Swatches (Col 1 & Col 2) + Status + FPS
-TOOLBAR_ROW2_H: int = 52    # Brushes + Extended MS Paint Shapes + Fill Mode
-TOOLBAR_ROW3_H: int = 52    # Paint Tools + AI Superpowers + Transforms + File/History
-TOOLBAR_HEIGHT: int = TOOLBAR_ROW1_H + TOOLBAR_ROW2_H + TOOLBAR_ROW3_H  # 150 px
+# ── Modern Spacious 2-Row Studio Toolbar ──────────────────────────────────────
+TOOLBAR_ROW1_H: int = 56    # Main Action Bar: Draw, Eraser, Fill, Quick Colors, Save, Clear
+TOOLBAR_ROW2_H: int = 50    # Sub-Bar / Tab Panels: Shapes, Brushes, AI Superpowers
+TOOLBAR_HEIGHT: int = TOOLBAR_ROW1_H + TOOLBAR_ROW2_H  # 106 px (leaves more canvas space!)
 
-BTN_W: int = 50   # button width
-BTN_H: int = 40   # button height
-BTN_M: int = 3    # horizontal gap
+BTN_W: int = 68   # Larger, much easier to hit!
+BTN_H: int = 42   # Comfortable height
+BTN_M: int = 4    # Clean gap
 
-# ── 16 Extended Studio Colors (BGR) ───────────────────────────────────────────
+# Dwell Hover Click Duration (seconds)
+DWELL_CLICK_TIME: float = 0.35
+
+# ── Quick Vibrant Studio Colors (BGR) ─────────────────────────────────────────
+QUICK_COLORS = [
+    ("BLACK",   (  0,   0,   0)),
+    ("WHITE",   (255, 255, 255)),
+    ("RED",     ( 30,  30, 235)),
+    ("ORANGE",  (  0, 140, 255)),
+    ("YELLOW",  (  0, 230, 245)),
+    ("GREEN",   ( 20, 200,  30)),
+    ("CYAN",    (245, 220,  15)),
+    ("BLUE",    (235,  80,  20)),
+    ("PURPLE",  (210,  30, 160)),
+    ("PINK",    (190,  90, 255)),
+]
+
 COLORS: dict = {
     "BLACK":    (  0,   0,   0),
     "DKGRAY":   ( 70,  70,  70),
     "GRAY":     (150, 150, 150),
     "WHITE":    (255, 255, 255),
-    "RED":      ( 20,  20, 235),
-    "ORANGE":   (  0, 135, 255),
+    "RED":      ( 30,  30, 235),
+    "ORANGE":   (  0, 140, 255),
     "YELLOW":   (  0, 230, 245),
     "LIME":     ( 30, 240, 100),
-    "GREEN":    (  0, 185,   0),
-    "CYAN":     (245, 220,  10),
-    "SKY":      (245, 160,  40),
-    "BLUE":     (235,  70,  20),
-    "PURPLE":   (210,  30, 150),
-    "PINK":     (190,  80, 255),
+    "GREEN":    ( 20, 200,  30),
+    "CYAN":     (245, 220,  15),
+    "SKY":      (245, 165,  45),
+    "BLUE":     (235,  80,  20),
+    "PURPLE":   (210,  30, 160),
+    "PINK":     (190,  90, 255),
     "MAGENTA":  (170,   0, 230),
     "BROWN":    ( 35,  65, 125),
 }
-DEFAULT_COLOR_NAME:  str = "BLACK"
+DEFAULT_COLOR_NAME:  str = "RED"
 DEFAULT_COLOR2_NAME: str = "WHITE"
 
 # ── Brush Settings ────────────────────────────────────────────────────────────
-DEFAULT_BRUSH_SIZE: int = 5
-MIN_BRUSH_SIZE:     int = 1
-MAX_BRUSH_SIZE:     int = 70
+DEFAULT_BRUSH_SIZE: int = 6
+MIN_BRUSH_SIZE:     int = 2
+MAX_BRUSH_SIZE:     int = 60
 ERASER_SIZE:        int = 45
 
-# Extended Brush Modes (MS Paint styles + Sci-Fi effects)
+# Brush Modes
 BRUSH_MODES = [
-    "pencil",    # 1px sharp pixel-art pencil
-    "callig",    # Calligraphy chisel nib
     "pen",       # Smooth ballpoint pen
     "marker",    # Semi-transparent highlighter
+    "callig",    # Calligraphy chisel nib
     "crayon",    # Wax crayon / chalk texture
     "spray",     # Airbrush spray
     "drip",      # Paint drip physics
@@ -58,70 +78,67 @@ BRUSH_MODES = [
     "sparkle",   # Magic fairy glitter
 ]
 BRUSH_LABELS = [
-    "PNCL", "CLIG", "PEN", "MARK", "CRAY", "SPRY", "DRIP", "NEON", "SPRK"
+    "PEN", "MARK", "CLIG", "CRAY", "SPRY", "DRIP", "NEON", "SPRK"
 ]
 DEFAULT_BRUSH_MODE: str = "pen"
 
 # ── MS Paint Shapes Suite ─────────────────────────────────────────────────────
 SHAPE_TOOLS = [
-    "freehand",  # Freehand drawing
+    "freehand",  # Freehand
     "line",      # Straight line
-    "curve",     # Bézier arc curve
+    "curve",     # Bézier curve
     "rect",      # Rectangle
     "rndrect",   # Rounded rectangle
     "circle",    # Ellipse / circle
-    "triangle",  # Equilateral / isosceles triangle
-    "rtriangle", # Right-angle triangle
-    "diamond",   # Diamond / rhombus
+    "triangle",  # Triangle
+    "diamond",   # Diamond
     "star5",     # 5-pointed star
-    "star4",     # 4-pointed star
-    "arrow",     # Directional arrow
     "heart",     # Heart
-    "lightning", # Lightning bolt
-    "callout",   # Comic speech bubble
-    "polygon",   # Regular N-gon (3 to 12 sides)
+    "arrow",     # Arrow
+    "callout",   # Comic bubble
+    "polygon",   # N-gon (3 to 12 sides)
 ]
 
 SHAPE_LABELS = [
     "FREE", "LINE", "CURV", "RECT", "RRCT", "CIRC",
-    "TRI", "RTRI", "DIAM", "STR5", "STR4", "ARRW",
-    "HART", "BOLT", "CALL", "POLY"
+    "TRI", "DIAM", "STAR", "HART", "ARRW", "BUBL", "POLY"
 ]
 DEFAULT_SHAPE: str = "freehand"
 DEFAULT_POLYGON_SIDES: int = 6
 
-# Shape Fill Modes (Outline Only, Solid Fill, Outline + Fill)
 SHAPE_FILL_MODES  = ["outline", "fill", "both"]
 SHAPE_FILL_LABELS = ["OUTLN", "FILL", "BOTH"]
 
 # ── MS Paint Special Tools ────────────────────────────────────────────────────
 PAINT_TOOLS = [
     "fill",       # Flood fill paint bucket
-    "eyedrop",    # Eyedropper with 4x live magnifying loupe
-    "text",       # Text placement tool
-    "select",     # Rectangular selection
-    "lasso",      # Freeform lasso selection
+    "eyedrop",    # Eyedropper with 4x live loupe
+    "text",       # Text tool
+    "select",     # Selection tool
     "crop",       # Crop to selection
 ]
 PAINT_LABELS = [
-    "BUCKET", "LOUPE", "TEXT", "SELECT", "LASSO", "CROP"
+    "BUCKET", "LOUPE", "TEXT", "SELECT", "CROP"
 ]
 
 # ── Revolutionary AI Superpowers ──────────────────────────────────────────────
 AI_TOOLS = [
-    "ai_snap",      # AI Shape Beautifier (Auto-snap rough sketches to vectors)
-    "ai_inpaint",   # AI Magic Content-Aware Eraser (Telea inpainting)
+    "ai_snap",      # AI Auto-Shape Beautifier (Snaps rough sketches to vectors)
+    "ai_inpaint",   # AI Magic Content-Aware Eraser
     "ai_book",      # AI Edge Art / Coloring Book mode
-    "ai_holo",      # Holographic Left-Hand Floating AR Palette
-    "ai_pressure",  # 3D Depth / Pressure Sensitivity
+    "ai_holo",      # Holographic AR Left-Hand Palette
+    "ai_pressure",  # 3D Depth Pressure Stylus
 ]
 AI_LABELS = [
     "🤖SNAP", "✨INPNT", "📖BOOK", "🔮HOLO", "🎚️PRES"
 ]
 
+# ── Toolbar Tab Categories ────────────────────────────────────────────────────
+TAB_MODES = ["BRUSHES", "SHAPES", "AI_TOOLS", "TRANSFORM"]
+
 # ── Symmetry ──────────────────────────────────────────────────────────────────
-SYMMETRY_MODES  = ["none", "mirror_h", "mirror_v", "quad", "radial_4", "radial_8", "radial_12"]
-SYMMETRY_LABELS = ["SY:NO", "SY:LR", "SY:UD", "SY:4", "SY:R4", "SY:R8", "SY:R12"]
+SYMMETRY_MODES  = ["none", "mirror_h", "mirror_v", "quad", "radial_4", "radial_8"]
+SYMMETRY_LABELS = ["SY:NO", "SY:LR", "SY:UD", "SY:4", "SY:R4", "SY:R8"]
 
 # ── Background Presets ────────────────────────────────────────────────────────
 BG_PRESETS = ["white", "black", "grid", "dotgrid", "starfield", "blueprint", "canvas"]
@@ -131,41 +148,36 @@ BG_LABELS  = ["BG:W", "BG:K", "BG:G", "BG:DOT", "BG:STR", "BG:BP", "BG:CANV"]
 SHOW_GRIDLINES:  bool = False
 SHOW_RULERS:     bool = False
 TRANSPARENT_SEL: bool = False
-CANVAS_ZOOM:     int  = 1   # 1x, 2x, 3x
+CANVAS_ZOOM:     int  = 1
 
-# ── Smoothing & Undo Stack ────────────────────────────────────────────────────
-SMOOTHING_ALPHA: float = 0.62
+# ── Ultra-Smooth Smoothing Alpha ──────────────────────────────────────────────
+# 0.72 provides buttery smooth digital ink with zero jitter
+SMOOTHING_ALPHA: float = 0.72
 MAX_UNDO_STEPS:  int   = 40
 
-# ── Particles & Physics ───────────────────────────────────────────────────────
-MAX_PARTICLES:  int = 1200
-CONFETTI_COUNT: int = 240
+# ── Particles ─────────────────────────────────────────────────────────────────
+MAX_PARTICLES:  int = 1000
+CONFETTI_COUNT: int = 200
 
 # ── MediaPipe Hand Tracking ───────────────────────────────────────────────────
 MAX_NUM_HANDS:        int   = 2
-DETECTION_CONFIDENCE: float = 0.72
+DETECTION_CONFIDENCE: float = 0.70
 TRACKING_CONFIDENCE:  float = 0.55
 
-import os
-
-# ── Paths ─────────────────────────────────────────────────────────────────────
-PROJECT_ROOT: str = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-DRAWINGS_DIR: str = os.path.join(PROJECT_ROOT, "drawings")
-
 # ── UI Theme (BGR) ────────────────────────────────────────────────────────────
-TOOLBAR_BG_COLOR:      tuple = (20,  20,  30)
-TOOLBAR_R2_BG:         tuple = (15,  15,  24)
-TOOLBAR_R3_BG:         tuple = (11,  11,  18)
-BUTTON_ACTIVE_COLOR:   tuple = (170, 115,  30)
-BUTTON_INACTIVE_COLOR: tuple = (40,   40,  54)
-BUTTON_TEXT_COLOR:     tuple = (235, 235, 235)
-BUTTON_TOOL_COLOR:     tuple = (35,   95, 175)
-BUTTON_AI_COLOR:       tuple = (140,  40, 160)   # Purple/Magenta for AI features
-STATUS_TEXT_COLOR:     tuple = (195, 195, 195)
+TOOLBAR_BG_COLOR:      tuple = (18,  18,  28)
+TOOLBAR_R2_BG:         tuple = (13,  13,  22)
+BUTTON_ACTIVE_COLOR:   tuple = (180, 120,  30)
+BUTTON_INACTIVE_COLOR: tuple = (38,   38,  52)
+BUTTON_TEXT_COLOR:     tuple = (240, 240, 240)
+BUTTON_TOOL_COLOR:     tuple = (35,  100, 185)
+BUTTON_AI_COLOR:       tuple = (150,  45, 175)
+STATUS_TEXT_COLOR:     tuple = (200, 200, 200)
 FPS_TEXT_COLOR:        tuple = (0,   240, 110)
 ACCENT:                tuple = (255, 185,  40)    # Gold
-ACCENT2:               tuple = (110, 210, 255)    # Ice Blue
-SELECTION_COLOR:       tuple = (0,   160, 255)    # Vibrant Orange
+ACCENT2:               tuple = (110, 215, 255)    # Ice Blue
+SELECTION_COLOR:       tuple = (0,   160, 255)
 
 SHOW_HUD:            bool = True
 DEFAULT_DARK_CANVAS: bool = False
+DEFAULT_DRAW_STYLE:  str  = "PINCH"   # "PINCH" (touch thumb+index to draw) or "POINT" (point index)
