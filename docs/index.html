@@ -1,0 +1,307 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>AI Air Draw — Revolutionary Web Studio</title>
+  <link rel="stylesheet" href="style.css">
+  <meta name="description" content="AI-powered touchless drawing studio with real-time hand tracking, 16 shapes, 9 brushes, and AI tools.">
+</head>
+<body>
+
+<!-- ══════════════════════════════════════════════════════════
+     CAMERA PERMISSION SCREEN
+══════════════════════════════════════════════════════════ -->
+<div id="cam-screen">
+  <div class="cam-card">
+    <div class="cam-logo">
+      <svg width="80" height="80" viewBox="0 0 80 80" fill="none">
+        <circle cx="40" cy="40" r="38" stroke="url(#grad1)" stroke-width="3"/>
+        <defs>
+          <linearGradient id="grad1" x1="0" y1="0" x2="80" y2="80" gradientUnits="userSpaceOnUse">
+            <stop offset="0%" stop-color="#00d4ff"/>
+            <stop offset="100%" stop-color="#b400ff"/>
+          </linearGradient>
+        </defs>
+        <text x="40" y="52" text-anchor="middle" font-size="36" fill="url(#grad1)">✋</text>
+      </svg>
+    </div>
+    <h1>AI Air Draw</h1>
+    <p class="cam-sub">Revolutionary Hand-Tracking Drawing Studio</p>
+    <ul class="feature-list">
+      <li>🎨 9 Pro Brushes + 16 Vector Shapes</li>
+      <li>🤖 AI Auto-Shape Snap &amp; Doodle Classifier</li>
+      <li>✋ Real-Time Hand Tracking via MediaPipe</li>
+      <li>🌈 Neon, Spray, Calligraphy &amp; more</li>
+      <li>🖌️ Paint Bucket, Eyedropper, Text &amp; Lasso</li>
+    </ul>
+    <button id="btn-start-cam" class="btn-primary">
+      <span>📷</span> Start Drawing Studio
+    </button>
+    <button id="btn-no-cam" class="btn-secondary">
+      🖱️ Use Mouse / Touch Instead
+    </button>
+    <p class="cam-note">Camera stays local — no data ever leaves your browser.</p>
+  </div>
+</div>
+
+<!-- ══════════════════════════════════════════════════════════
+     MAIN APP
+══════════════════════════════════════════════════════════ -->
+<div id="app" style="display:none">
+
+  <!-- TOOLBAR ROW 1 -->
+  <div id="toolbar-row1">
+    <div class="tb-brand">
+      <span class="brand-icon">✋</span>
+      <span class="brand-name">AI Air Draw</span>
+      <span class="ai-badge">AI</span>
+    </div>
+
+    <!-- Quick action buttons -->
+    <div class="tb-group" id="quick-tools">
+      <button class="tb-btn tool-active" data-tool="pen" title="Pen (P)">🖊️</button>
+      <button class="tb-btn" data-tool="eraser" title="Eraser (E)">⬜</button>
+      <button class="tb-btn" data-tool="fill" title="Fill Bucket (F)">🪣</button>
+      <button class="tb-btn" data-tool="eyedropper" title="Eyedropper (I)">💉</button>
+      <button class="tb-btn" data-tool="text" title="Text Tool (T)">T</button>
+      <button class="tb-btn" data-tool="select-rect" title="Rect Select (S)">⬚</button>
+      <button class="tb-btn" data-tool="lasso" title="Lasso (L)">🌀</button>
+      <button class="tb-btn" data-tool="crop" title="Crop (C)">✂️</button>
+      <button class="tb-btn" data-tool="magnifier" title="Magnifier (M)">🔍</button>
+    </div>
+
+    <div class="tb-sep"></div>
+
+    <!-- Drawing mode toggle -->
+    <div class="tb-group">
+      <label class="draw-mode-label">Draw Mode</label>
+      <button id="btn-hand-mode" class="mode-btn active" title="Hand Tracking Mode">✋</button>
+      <button id="btn-mouse-mode" class="mode-btn" title="Mouse/Touch Mode">🖱️</button>
+    </div>
+
+    <div class="tb-sep"></div>
+
+    <!-- Color 1 & Color 2 swatches -->
+    <div class="tb-group color-group">
+      <div class="color-stack">
+        <div id="color2-swatch" class="color-swatch color2" title="Background/Fill Color"></div>
+        <div id="color1-swatch" class="color-swatch color1" title="Foreground/Stroke Color"></div>
+      </div>
+      <div class="color-discs" id="color-discs">
+        <!-- Filled by JS -->
+      </div>
+      <button id="btn-custom-color" class="tb-btn" title="Custom Color">🎨</button>
+    </div>
+
+    <div class="tb-sep"></div>
+
+    <!-- Size slider -->
+    <div class="tb-group">
+      <label class="size-label">Size</label>
+      <input type="range" id="size-slider" min="1" max="80" value="8" class="size-range">
+      <span id="size-val">8</span>
+    </div>
+
+    <!-- Opacity -->
+    <div class="tb-group">
+      <label class="size-label">Opacity</label>
+      <input type="range" id="opacity-slider" min="1" max="100" value="100" class="size-range">
+      <span id="opacity-val">100</span>
+    </div>
+
+    <div class="tb-sep"></div>
+
+    <!-- Actions -->
+    <div class="tb-group">
+      <button class="tb-btn" id="btn-undo" title="Undo (Ctrl+Z)">↩️</button>
+      <button class="tb-btn" id="btn-redo" title="Redo (Ctrl+Y)">↪️</button>
+      <button class="tb-btn" id="btn-clear" title="Clear Canvas">🗑️</button>
+      <button class="tb-btn" id="btn-save" title="Save PNG (Ctrl+S)">💾</button>
+    </div>
+
+    <!-- Camera toggle -->
+    <button id="btn-cam-toggle" class="cam-toggle-btn" title="Toggle Camera">📷 Camera ON</button>
+  </div>
+
+  <!-- TOOLBAR ROW 2 — tabs -->
+  <div id="toolbar-row2">
+    <div class="tab-buttons">
+      <button class="tab-btn active" data-tab="brushes">🖌️ Brushes</button>
+      <button class="tab-btn" data-tab="shapes">⬡ Shapes</button>
+      <button class="tab-btn" data-tab="ai">🤖 AI Studio</button>
+      <button class="tab-btn" data-tab="fx">✨ Effects</button>
+      <button class="tab-btn" data-tab="bg">🌌 Background</button>
+      <button class="tab-btn" data-tab="sym">🔀 Symmetry</button>
+    </div>
+
+    <div id="tab-panel-brushes" class="tab-panel active">
+      <button class="tb-btn tool-panel-btn" data-tool="pen" title="Pen">🖊️ Pen</button>
+      <button class="tb-btn tool-panel-btn" data-tool="pencil" title="Pencil">✏️ Pencil</button>
+      <button class="tb-btn tool-panel-btn" data-tool="marker" title="Marker">🖍️ Marker</button>
+      <button class="tb-btn tool-panel-btn" data-tool="calligraphy" title="Calligraphy">🪶 Calli</button>
+      <button class="tb-btn tool-panel-btn" data-tool="crayon" title="Crayon">🎨 Crayon</button>
+      <button class="tb-btn tool-panel-btn" data-tool="spray" title="Spray">💨 Spray</button>
+      <button class="tb-btn tool-panel-btn" data-tool="neon" title="Neon">🌟 Neon</button>
+      <button class="tb-btn tool-panel-btn" data-tool="drip" title="Drip">💧 Drip</button>
+      <button class="tb-btn tool-panel-btn" data-tool="sparkle" title="Sparkle">✨ Sparkle</button>
+    </div>
+
+    <div id="tab-panel-shapes" class="tab-panel" style="display:none">
+      <button class="tb-btn tool-panel-btn" data-tool="line" title="Line">╱ Line</button>
+      <button class="tb-btn tool-panel-btn" data-tool="rect" title="Rectangle">▭ Rect</button>
+      <button class="tb-btn tool-panel-btn" data-tool="rndrect" title="Rounded Rect">▢ RndRect</button>
+      <button class="tb-btn tool-panel-btn" data-tool="circle" title="Circle/Ellipse">⬭ Ellipse</button>
+      <button class="tb-btn tool-panel-btn" data-tool="triangle" title="Triangle">▲ Triangle</button>
+      <button class="tb-btn tool-panel-btn" data-tool="diamond" title="Diamond">◈ Diamond</button>
+      <button class="tb-btn tool-panel-btn" data-tool="star5" title="5-Point Star">⭐ Star5</button>
+      <button class="tb-btn tool-panel-btn" data-tool="star4" title="4-Point Star">✦ Star4</button>
+      <button class="tb-btn tool-panel-btn" data-tool="arrow" title="Arrow">→ Arrow</button>
+      <button class="tb-btn tool-panel-btn" data-tool="heart" title="Heart">❤️ Heart</button>
+      <button class="tb-btn tool-panel-btn" data-tool="lightning" title="Lightning">⚡ Lightning</button>
+      <button class="tb-btn tool-panel-btn" data-tool="callout" title="Speech Callout">💬 Callout</button>
+      <button class="tb-btn tool-panel-btn" data-tool="hexagon" title="Hexagon">⬡ Hexagon</button>
+      <button class="tb-btn tool-panel-btn" data-tool="curve" title="Bezier Curve">〰️ Curve</button>
+      <button class="tb-btn tool-panel-btn" data-tool="polygon" title="Custom Polygon">🔷 Polygon</button>
+      <button class="tb-btn tool-panel-btn" data-tool="freehand" title="Freehand Shape">🌊 Freehand</button>
+      <div class="shape-fill-group">
+        <label>Fill:</label>
+        <button class="tb-btn sfill-btn active" data-fill="outline" title="Outline Only">□</button>
+        <button class="tb-btn sfill-btn" data-fill="fill" title="Filled">■</button>
+        <button class="tb-btn sfill-btn" data-fill="both" title="Outline + Fill">▣</button>
+      </div>
+    </div>
+
+    <div id="tab-panel-ai" class="tab-panel" style="display:none">
+      <button class="ai-btn" id="btn-ai-snap" title="AI Auto-Shape Beautifier">🎯 AI Snap</button>
+      <button class="ai-btn" id="btn-ai-classify" title="AI Doodle Classifier">🔍 Classify</button>
+      <button class="ai-btn" id="btn-ai-coloring" title="AI Coloring Book Mode">📖 Coloring Book</button>
+      <button class="ai-btn" id="btn-ai-inpaint" title="AI Inpainting (Fill Region)">🪄 Inpaint</button>
+      <button class="ai-btn" id="btn-ai-style" title="AI Style Transfer">🖼️ Style</button>
+      <label class="ai-toggle-wrap">
+        <input type="checkbox" id="ai-snap-realtime"> Live AI Snap
+      </label>
+      <label class="ai-toggle-wrap">
+        <input type="checkbox" id="ai-rainbow"> Rainbow Mode
+      </label>
+    </div>
+
+    <div id="tab-panel-fx" class="tab-panel" style="display:none">
+      <button class="tb-btn fx-btn" id="btn-fx-invert" title="Invert Colors">🔄 Invert</button>
+      <button class="tb-btn fx-btn" id="btn-fx-gray" title="Grayscale">⚫ Grayscale</button>
+      <button class="tb-btn fx-btn" id="btn-fx-blur" title="Blur">🌫️ Blur</button>
+      <button class="tb-btn fx-btn" id="btn-fx-sharpen" title="Sharpen">🔆 Sharpen</button>
+      <button class="tb-btn fx-btn" id="btn-fx-sepia" title="Sepia">🟤 Sepia</button>
+      <button class="tb-btn fx-btn" id="btn-fx-emboss" title="Emboss">⛰️ Emboss</button>
+      <button class="tb-btn fx-btn" id="btn-fx-fliph" title="Flip Horizontal">↔️ Flip H</button>
+      <button class="tb-btn fx-btn" id="btn-fx-flipv" title="Flip Vertical">↕️ Flip V</button>
+      <button class="tb-btn fx-btn" id="btn-fx-rot90" title="Rotate 90°">🔃 Rotate</button>
+    </div>
+
+    <div id="tab-panel-bg" class="tab-panel" style="display:none">
+      <button class="tb-btn bg-btn" data-bg="white">⬜ White</button>
+      <button class="tb-btn bg-btn" data-bg="black">⬛ Black</button>
+      <button class="tb-btn bg-btn" data-bg="grid">🔲 Grid</button>
+      <button class="tb-btn bg-btn" data-bg="dotgrid">· Dots</button>
+      <button class="tb-btn bg-btn" data-bg="stars">🌟 Stars</button>
+      <button class="tb-btn bg-btn" data-bg="blueprint">📐 Blueprint</button>
+      <button class="tb-btn bg-btn" data-bg="canvas">🎨 Canvas Tex</button>
+      <button class="tb-btn bg-btn" data-bg="gradient">🌈 Gradient</button>
+    </div>
+
+    <div id="tab-panel-sym" class="tab-panel" style="display:none">
+      <button class="tb-btn sym-btn active" data-sym="none">⬛ None</button>
+      <button class="tb-btn sym-btn" data-sym="mirror_h">↔️ Mirror H</button>
+      <button class="tb-btn sym-btn" data-sym="mirror_v">↕️ Mirror V</button>
+      <button class="tb-btn sym-btn" data-sym="quad">✦ Quad</button>
+      <button class="tb-btn sym-btn" data-sym="radial4">⊕ Radial 4</button>
+      <button class="tb-btn sym-btn" data-sym="radial8">❋ Radial 8</button>
+    </div>
+  </div>
+
+  <!-- STUDIO AREA -->
+  <div id="studio">
+    <video id="webcam" autoplay playsinline muted></video>
+    <canvas id="canvas-bg"></canvas>
+    <canvas id="canvas-draw"></canvas>
+    <canvas id="canvas-overlay"></canvas>
+
+    <!-- Dwell Ring SVG -->
+    <svg id="dwell-svg" style="display:none">
+      <circle id="dwell-bg" cx="30" cy="30" r="26" stroke="rgba(255,255,255,0.2)" stroke-width="5" fill="none"/>
+      <circle id="dwell-arc" cx="30" cy="30" r="26" stroke="#00d4ff" stroke-width="5" fill="none"
+              stroke-dasharray="163.4" stroke-dashoffset="163.4"
+              stroke-linecap="round" transform="rotate(-90 30 30)"/>
+    </svg>
+
+    <!-- Cursor dot -->
+    <div id="cursor-dot"></div>
+  </div>
+
+  <!-- Tracker status -->
+  <div id="tracker-status">
+    <span id="tracker-icon">👁️</span>
+    <span id="tracker-text">Initializing...</span>
+  </div>
+
+  <!-- Gesture hint -->
+  <div id="gesture-hint" style="display:none">
+    <div class="gesture-row"><span class="g-icon">🤏</span><span>Pinch → Draw</span></div>
+    <div class="gesture-row"><span class="g-icon">✌️</span><span>Peace → Erase</span></div>
+    <div class="gesture-row"><span class="g-icon">🖐</span><span>Open → Hover</span></div>
+    <div class="gesture-row"><span class="g-icon">👍</span><span>Thumbs Up → Save</span></div>
+    <div class="gesture-row"><span class="g-icon">🤙</span><span>Ring Up → Fill</span></div>
+    <button id="btn-close-hint">✕</button>
+  </div>
+  <button id="btn-show-hint" title="Show Gestures">❓</button>
+
+</div><!-- /app -->
+
+<!-- Toast -->
+<div id="toast"></div>
+
+<!-- Custom Color Picker Modal -->
+<div id="color-picker-modal" style="display:none">
+  <div class="picker-card">
+    <h3>Pick Color</h3>
+    <canvas id="color-wheel-canvas" width="220" height="220"></canvas>
+    <div class="picker-controls">
+      <label>H <input type="range" id="ph" min="0" max="360" value="0"></label>
+      <label>S <input type="range" id="ps" min="0" max="100" value="100"></label>
+      <label>L <input type="range" id="pl" min="0" max="100" value="50"></label>
+      <input type="text" id="phex" placeholder="#ff0000" maxlength="7">
+    </div>
+    <div class="picker-preview" id="picker-preview"></div>
+    <div class="picker-buttons">
+      <button id="picker-fg">Set Foreground</button>
+      <button id="picker-bg">Set Background</button>
+      <button id="picker-cancel">Cancel</button>
+    </div>
+  </div>
+</div>
+
+<!-- Text Input Overlay -->
+<div id="text-input-wrap" style="display:none">
+  <input type="text" id="text-input" placeholder="Type here, then click canvas...">
+  <select id="font-select">
+    <option>Arial</option>
+    <option>Georgia</option>
+    <option>Courier New</option>
+    <option>Impact</option>
+    <option>Comic Sans MS</option>
+    <option>Trebuchet MS</option>
+  </select>
+  <button id="btn-text-cancel">✕</button>
+</div>
+
+<!-- AI Classification result -->
+<div id="ai-result" style="display:none">
+  <span id="ai-result-text"></span>
+  <button id="btn-ai-result-close">✕</button>
+</div>
+
+<!-- MediaPipe Tasks Vision via CDN -->
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/vision_bundle.js" crossorigin="anonymous"></script>
+<script src="app.js"></script>
+</body>
+</html>
