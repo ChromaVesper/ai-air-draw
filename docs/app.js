@@ -1,225 +1,279 @@
 /**
- * AI Air Draw — Revolutionary Web Studio
- * Full browser-based drawing engine with MediaPipe hand tracking
- * 9 Brushes · 16 Shapes · AI Tools · Symmetry · Effects
+ * AI Air Draw — Revolutionary MS Paint AI Edition  v3.0
+ * Browser-based drawing studio with live MediaPipe Hands AI tracking
+ * 9 Brushes · 16 Vector Shapes · AI Tools · Symmetry · Filters
  */
 
 'use strict';
 
 // ═══════════════════════════════════════════════════════════
-// GLOBALS
+// CONSTANTS & COLOR PALETTE
 // ═══════════════════════════════════════════════════════════
 const PALETTE = [
-  '#000000','#FFFFFF','#FF0000','#00CC00','#0000FF','#FFFF00',
-  '#FF8800','#FF00FF','#00FFFF','#8B4513','#808080','#C0C0C0',
-  '#FF69B4','#7B68EE','#00FA9A','#FFD700','#FF6347','#4169E1',
-  '#32CD32','#DC143C'
+  '#000000', '#FFFFFF', '#7F7F7F', '#C3C3C3',
+  '#880015', '#B97A57', '#ED1C24', '#FFAEC9',
+  '#FF7F27', '#FFC90E', '#FFF200', '#EFE4B0',
+  '#22B14C', '#B5E61D', '#00A2E8', '#99D9EA',
+  '#3F48CC', '#7092BE', '#A349A4', '#C8BFE7'
 ];
 
-let COLOR1 = '#ff0000';   // foreground / stroke
-let COLOR2 = '#ffffff';   // background / fill
+// Active tool and style states
+let COLOR1 = '#ED1C24';       // Foreground / Stroke (default red)
+let COLOR2 = '#FFFFFF';       // Background / Fill (default white)
 let BRUSH_SIZE = 8;
 let OPACITY = 1.0;
 let CURRENT_TOOL = 'pen';
-let SHAPE_FILL = 'outline';
-let SYMMETRY = 'none';
-let BACKGROUND = 'white';
+let SHAPE_FILL = 'outline';   // 'outline' | 'fill' | 'both'
+let SYMMETRY = 'none';        // 'none' | 'mirror_h' | 'mirror_v' | 'quad' | 'radial4' | 'radial8'
+let BACKGROUND = 'white';     // 'white' | 'black' | 'grid' | 'dotgrid' | 'stars' | 'blueprint' | 'canvas' | 'gradient'
 let RAINBOW_MODE = false;
 let AI_SNAP_LIVE = false;
 let rainbowHue = 0;
 
+// Stroke & pointer state (shared by mouse, touch, and hand-tracking)
 let isDrawing = false;
 let startX = 0, startY = 0;
 let lastX = 0, lastY = 0;
-let strokePoints = [];   // for AI snap
+let strokePoints = [];
 let lassoPoints = [];
-let dripPoints = [];
+let dripParticles = [];
 let curveControl = null;
 let textPending = null;
-let polygonSides = 6;
-let magnifierZoom = 3;
+const polygonSides = 6;
+const magnifierZoom = 3;
 
-// Hand tracking
-let handLandmarker = null;
+// MediaPipe & Camera state
+let handsInstance = null;
+let cameraInstance = null;
 let cameraActive = false;
-let lastVideoTime = -1;
-let handMode = true;
+let handMode = true;           // whether hand tracking controls cursor/ink
 let pinchWasDown = false;
+let prevGesture = 'hover';
+let gestureDebounceTimer = 0;
 let dwellTarget = null;
 let dwellStart = 0;
 const DWELL_MS = 500;
 const PINCH_THRESH = 0.055;
+const PINCH_RELEASE = 0.082;   // hysteresis prevents flickering at boundary
 
-// undo/redo
+// Cursor smoothing (Exponential Moving Average)
+let smoothCursorX = 0, smoothCursorY = 0;
+const SMOOTH_ALPHA = 0.45;
+
+// Undo / Redo history stack
 const UNDO_MAX = 40;
 let undoStack = [];
 let redoStack = [];
 
-// Canvas layers
+// Canvas elements & rendering contexts
 let canvasBg, ctxBg;
 let canvasDraw, ctxDraw;
 let canvasOverlay, ctxOverlay;
-let canvasW, canvasH;
+let canvasW = 0, canvasH = 0;
 
 // ═══════════════════════════════════════════════════════════
-// INIT
+// INITIALIZATION
 // ═══════════════════════════════════════════════════════════
 window.addEventListener('DOMContentLoaded', () => {
-  buildPalette();
-  bindCamScreen();
-  bindKeyboard();
+  buildColorPalette();
+  bindCamScreenButtons();
+  bindKeyboardShortcuts();
+  initColorWheel();
 });
 
-function buildPalette() {
+function buildColorPalette() {
   const container = document.getElementById('color-discs');
+  if (!container) return;
+  container.innerHTML = '';
   PALETTE.forEach(hex => {
     const d = document.createElement('div');
     d.className = 'color-disc';
     d.style.background = hex;
-    d.title = hex;
+    d.title = `Left-click: Color 1 (${hex}) | Right-click: Color 2`;
     d.addEventListener('click', () => setColor1(hex));
     d.addEventListener('contextmenu', e => { e.preventDefault(); setColor2(hex); });
     container.appendChild(d);
   });
 }
 
-function bindCamScreen() {
-  document.getElementById('btn-start-cam').addEventListener('click', () => {
-    document.getElementById('cam-screen').style.display = 'none';
-    document.getElementById('app').style.display = 'flex';
-    initApp(true);
-  });
-  document.getElementById('btn-no-cam').addEventListener('click', () => {
-    document.getElementById('cam-screen').style.display = 'none';
-    document.getElementById('app').style.display = 'flex';
-    initApp(false);
-  });
+function bindCamScreenButtons() {
+  const btnStartCam = document.getElementById('btn-start-cam');
+  const btnNoCam = document.getElementById('btn-no-cam');
+  const camScreen = document.getElementById('cam-screen');
+  const app = document.getElementById('app');
+
+  if (btnStartCam) {
+    btnStartCam.addEventListener('click', () => {
+      camScreen.style.display = 'none';
+      app.style.display = 'flex';
+      initStudio(true);
+    });
+  }
+  if (btnNoCam) {
+    btnNoCam.addEventListener('click', () => {
+      camScreen.style.display = 'none';
+      app.style.display = 'flex';
+      initStudio(false);
+    });
+  }
 }
 
-function initApp(withCamera) {
-  // Setup canvases
+function initStudio(withCamera) {
   canvasBg = document.getElementById('canvas-bg');
   canvasDraw = document.getElementById('canvas-draw');
   canvasOverlay = document.getElementById('canvas-overlay');
+
   ctxBg = canvasBg.getContext('2d');
   ctxDraw = canvasDraw.getContext('2d', { willReadFrequently: true });
   ctxOverlay = canvasOverlay.getContext('2d');
 
   resizeCanvases();
-  window.addEventListener('resize', resizeCanvases);
+  window.addEventListener('resize', debounce(resizeCanvases, 120));
   renderBackground();
 
-  bindToolbar();
-  bindCanvasEvents();
+  bindToolbarControls();
+  bindCanvasPointerEvents();
+  updateColorSwatches();
+  pushUndo();
 
   if (withCamera) {
     handMode = true;
-    startCamera();
+    startHandTracking();
   } else {
     handMode = false;
-    setTrackerStatus('Mouse mode', '🖱️');
+    setTrackerStatus('Mouse / Touch mode active', '🖱️');
     document.getElementById('btn-cam-toggle').textContent = '📷 Camera OFF';
+    document.getElementById('btn-mouse-mode').classList.add('active');
+    document.getElementById('btn-hand-mode').classList.remove('active');
   }
 
-  pushUndo();
-  showToast('🎨 AI Air Draw Ready! ' + (withCamera ? 'Show your hand to start.' : 'Use mouse or touch to draw.'));
+  showToast('🎨 AI Air Draw Studio Ready!');
 }
 
 function resizeCanvases() {
+  if (!canvasBg) return;
   const studio = document.getElementById('studio');
-  canvasW = studio.clientWidth;
-  canvasH = studio.clientHeight;
+  canvasW = studio.clientWidth || window.innerWidth;
+  canvasH = studio.clientHeight || (window.innerHeight - 94);
+
+  // Preserve drawing layer contents across resize
+  const tempCanvas = document.createElement('canvas');
+  tempCanvas.width = canvasW;
+  tempCanvas.height = canvasH;
+  const tempCtx = tempCanvas.getContext('2d');
+  if (canvasDraw && canvasDraw.width > 0 && canvasDraw.height > 0) {
+    tempCtx.drawImage(canvasDraw, 0, 0);
+  }
+
   [canvasBg, canvasDraw, canvasOverlay].forEach(c => {
     c.width = canvasW;
     c.height = canvasH;
   });
+
   renderBackground();
+  if (canvasDraw && tempCanvas.width > 0) {
+    ctxDraw.drawImage(tempCanvas, 0, 0);
+  }
+}
+
+function debounce(fn, ms) {
+  let timer;
+  return (...args) => {
+    clearTimeout(timer);
+    timer = setTimeout(() => fn(...args), ms);
+  };
 }
 
 // ═══════════════════════════════════════════════════════════
-// TOOLBAR BINDING
+// TOOLBAR & CONTROLS BINDING
 // ═══════════════════════════════════════════════════════════
-function bindToolbar() {
-  // Tool buttons
+function bindToolbarControls() {
+  // Tool selector buttons (both top row and panels)
   document.querySelectorAll('[data-tool]').forEach(btn => {
     btn.addEventListener('click', () => selectTool(btn.dataset.tool));
   });
 
-  // Tab buttons
+  // Tab category buttons
   document.querySelectorAll('.tab-btn').forEach(btn => {
     btn.addEventListener('click', () => {
       document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
-      document.querySelectorAll('.tab-panel').forEach(p => p.style.display = 'none');
+      document.querySelectorAll('.tab-panel').forEach(p => { p.style.display = 'none'; });
       btn.classList.add('active');
-      document.getElementById('tab-panel-' + btn.dataset.tab).style.display = 'flex';
+      const panel = document.getElementById('tab-panel-' + btn.dataset.tab);
+      if (panel) panel.style.display = 'flex';
     });
   });
 
-  // Size slider
+  // Size slider — live sync with instant linewidth update
   const sizeSlider = document.getElementById('size-slider');
-  sizeSlider.addEventListener('input', () => {
-    BRUSH_SIZE = +sizeSlider.value;
-    document.getElementById('size-val').textContent = BRUSH_SIZE;
-  });
+  const sizeVal = document.getElementById('size-val');
+  function onSizeChange(val) {
+    BRUSH_SIZE = Math.max(1, Math.min(80, parseInt(val, 10)));
+    sizeSlider.value = BRUSH_SIZE;
+    sizeVal.textContent = BRUSH_SIZE;
+  }
+  sizeSlider.addEventListener('input', e => onSizeChange(e.target.value));
+  sizeSlider.addEventListener('change', e => onSizeChange(e.target.value));
 
   // Opacity slider
   const opSlider = document.getElementById('opacity-slider');
-  opSlider.addEventListener('input', () => {
-    OPACITY = opSlider.value / 100;
-    document.getElementById('opacity-val').textContent = opSlider.value;
+  const opVal = document.getElementById('opacity-val');
+  opSlider.addEventListener('input', e => {
+    OPACITY = parseInt(e.target.value, 10) / 100;
+    opVal.textContent = e.target.value;
   });
 
-  // Undo / Redo / Clear / Save
+  // Actions
   document.getElementById('btn-undo').addEventListener('click', undo);
   document.getElementById('btn-redo').addEventListener('click', redo);
   document.getElementById('btn-clear').addEventListener('click', clearCanvas);
   document.getElementById('btn-save').addEventListener('click', saveImage);
 
-  // Color swatches
+  // Swatches & Custom Color Picker
   document.getElementById('color1-swatch').addEventListener('click', () => openColorPicker('fg'));
   document.getElementById('color2-swatch').addEventListener('click', () => openColorPicker('bg'));
-
-  // Custom color
   document.getElementById('btn-custom-color').addEventListener('click', () => openColorPicker('fg'));
 
-  // Shape fill
+  // Shape fill style toggle
   document.querySelectorAll('.sfill-btn').forEach(btn => {
     btn.addEventListener('click', () => {
       document.querySelectorAll('.sfill-btn').forEach(b => b.classList.remove('active'));
       btn.classList.add('active');
       SHAPE_FILL = btn.dataset.fill;
+      showToast('Shape style: ' + SHAPE_FILL);
     });
   });
 
-  // AI buttons
-  document.getElementById('btn-ai-snap').addEventListener('click', runAISnap);
-  document.getElementById('btn-ai-classify').addEventListener('click', runAIClassify);
-  document.getElementById('btn-ai-coloring').addEventListener('click', runColoringBook);
-  document.getElementById('btn-ai-inpaint').addEventListener('click', runInpaint);
-  document.getElementById('btn-ai-style').addEventListener('click', runStyleTransfer);
+  // AI tools
+  document.getElementById('btn-ai-snap').addEventListener('click', runAIShapeSnap);
+  document.getElementById('btn-ai-classify').addEventListener('click', runAIDoodleClassifier);
+  document.getElementById('btn-ai-coloring').addEventListener('click', runAIColoringBook);
+  document.getElementById('btn-ai-inpaint').addEventListener('click', runAIInpaint);
+  document.getElementById('btn-ai-style').addEventListener('click', runAIStyleTransfer);
   document.getElementById('ai-snap-realtime').addEventListener('change', e => { AI_SNAP_LIVE = e.target.checked; });
   document.getElementById('ai-rainbow').addEventListener('change', e => { RAINBOW_MODE = e.target.checked; });
 
-  // FX buttons
-  document.getElementById('btn-fx-invert').addEventListener('click', () => applyFX('invert'));
-  document.getElementById('btn-fx-gray').addEventListener('click', () => applyFX('grayscale'));
-  document.getElementById('btn-fx-blur').addEventListener('click', () => applyFX('blur'));
-  document.getElementById('btn-fx-sharpen').addEventListener('click', () => applyFX('sharpen'));
-  document.getElementById('btn-fx-sepia').addEventListener('click', () => applyFX('sepia'));
-  document.getElementById('btn-fx-emboss').addEventListener('click', () => applyFX('emboss'));
-  document.getElementById('btn-fx-fliph').addEventListener('click', () => applyFX('fliph'));
-  document.getElementById('btn-fx-flipv').addEventListener('click', () => applyFX('flipv'));
-  document.getElementById('btn-fx-rot90').addEventListener('click', () => applyFX('rot90'));
+  // Effects & Filters
+  const fxList = [
+    ['btn-fx-invert', 'invert'], ['btn-fx-gray', 'grayscale'], ['btn-fx-blur', 'blur'],
+    ['btn-fx-sharpen', 'sharpen'], ['btn-fx-sepia', 'sepia'], ['btn-fx-emboss', 'emboss'],
+    ['btn-fx-fliph', 'fliph'], ['btn-fx-flipv', 'flipv'], ['btn-fx-rot90', 'rot90']
+  ];
+  fxList.forEach(([id, fx]) => {
+    const el = document.getElementById(id);
+    if (el) el.addEventListener('click', () => applyFX(fx));
+  });
 
-  // Background
+  // Background presets
   document.querySelectorAll('.bg-btn').forEach(btn => {
     btn.addEventListener('click', () => {
       BACKGROUND = btn.dataset.bg;
       renderBackground();
+      showToast('Background: ' + BACKGROUND);
     });
   });
 
-  // Symmetry
+  // Symmetry modes
   document.querySelectorAll('.sym-btn').forEach(btn => {
     btn.addEventListener('click', () => {
       document.querySelectorAll('.sym-btn').forEach(b => b.classList.remove('active'));
@@ -229,24 +283,28 @@ function bindToolbar() {
     });
   });
 
-  // Camera toggle
+  // Camera on/off toggle
   document.getElementById('btn-cam-toggle').addEventListener('click', toggleCamera);
 
-  // Hand / Mouse mode
+  // Input Mode switch (Hand vs Mouse)
   document.getElementById('btn-hand-mode').addEventListener('click', () => {
     handMode = true;
     document.getElementById('btn-hand-mode').classList.add('active');
     document.getElementById('btn-mouse-mode').classList.remove('active');
-    if (!cameraActive) startCamera();
+    if (!cameraActive) {
+      startHandTracking();
+    } else {
+      setTrackerStatus('Hand Tracking Mode Active ✋', '✋');
+    }
   });
   document.getElementById('btn-mouse-mode').addEventListener('click', () => {
     handMode = false;
     document.getElementById('btn-mouse-mode').classList.add('active');
     document.getElementById('btn-hand-mode').classList.remove('active');
-    setTrackerStatus('Mouse mode', '🖱️');
+    setTrackerStatus('Mouse / Touch Mode Active', '🖱️');
   });
 
-  // Gesture hint
+  // Gesture guide drawer
   document.getElementById('btn-show-hint').addEventListener('click', () => {
     document.getElementById('gesture-hint').style.display = 'flex';
   });
@@ -254,121 +312,169 @@ function bindToolbar() {
     document.getElementById('gesture-hint').style.display = 'none';
   });
 
-  // Color picker modal
-  document.getElementById('picker-fg').addEventListener('click', () => { applyPickerColor('fg'); closeColorPicker(); });
-  document.getElementById('picker-bg').addEventListener('click', () => { applyPickerColor('bg'); closeColorPicker(); });
+  // Color picker modal controls
+  document.getElementById('picker-fg').addEventListener('click', () => { applyPickedColor('fg'); closeColorPicker(); });
+  document.getElementById('picker-bg').addEventListener('click', () => { applyPickedColor('bg'); closeColorPicker(); });
   document.getElementById('picker-cancel').addEventListener('click', closeColorPicker);
-  ['ph','ps','pl'].forEach(id => {
-    document.getElementById(id).addEventListener('input', updatePickerPreview);
+  ['ph', 'ps', 'pl'].forEach(id => {
+    const el = document.getElementById(id);
+    if (el) el.addEventListener('input', updateColorPickerPreview);
   });
-  document.getElementById('phex').addEventListener('change', e => {
-    const c = hexToHsl(e.target.value);
-    if (c) {
-      document.getElementById('ph').value = c.h;
-      document.getElementById('ps').value = c.s;
-      document.getElementById('pl').value = c.l;
-      updatePickerPreview();
-    }
-  });
-  drawColorWheel();
+  const hexInput = document.getElementById('phex');
+  if (hexInput) {
+    hexInput.addEventListener('change', e => {
+      const hsl = hexToHsl(e.target.value);
+      if (hsl) {
+        document.getElementById('ph').value = hsl.h;
+        document.getElementById('ps').value = hsl.s;
+        document.getElementById('pl').value = hsl.l;
+        updateColorPickerPreview();
+      }
+    });
+  }
 
-  // Text cancel
+  // Floating text tool cancel button
   document.getElementById('btn-text-cancel').addEventListener('click', () => {
     document.getElementById('text-input-wrap').style.display = 'none';
     textPending = null;
   });
 
-  // AI result close
+  // AI Classification result close button
   document.getElementById('btn-ai-result-close').addEventListener('click', () => {
     document.getElementById('ai-result').style.display = 'none';
   });
+
+  // Retry AI dynamic button
+  document.addEventListener('click', e => {
+    if (e.target && e.target.id === 'btn-retry-ai') {
+      startHandTracking();
+    }
+  });
+}
+
+function updateColorSwatches() {
+  const c1 = document.getElementById('color1-swatch');
+  const c2 = document.getElementById('color2-swatch');
+  if (c1) c1.style.background = COLOR1;
+  if (c2) c2.style.background = COLOR2;
+}
+
+function setColor1(hex) {
+  COLOR1 = hex;
+  updateColorSwatches();
+}
+function setColor2(hex) {
+  COLOR2 = hex;
+  updateColorSwatches();
 }
 
 // ═══════════════════════════════════════════════════════════
-// TOOL SELECTION
+// TOOL SELECTION & CURSORS
 // ═══════════════════════════════════════════════════════════
 function selectTool(tool) {
   CURRENT_TOOL = tool;
   document.querySelectorAll('[data-tool]').forEach(b => b.classList.remove('tool-active'));
   document.querySelectorAll(`[data-tool="${tool}"]`).forEach(b => b.classList.add('tool-active'));
 
-  // Show text input bar if text tool
-  if (tool === 'text') {
-    document.getElementById('text-input-wrap').style.display = 'flex';
-  } else {
-    document.getElementById('text-input-wrap').style.display = 'none';
-  }
+  const textWrap = document.getElementById('text-input-wrap');
+  if (textWrap) textWrap.style.display = (tool === 'text') ? 'flex' : 'none';
 
-  canvasOverlay.style.cursor = getCursor(tool);
+  if (canvasOverlay) canvasOverlay.style.cursor = getToolCursor(tool);
   showToast('Tool: ' + tool);
 }
 
-function getCursor(tool) {
-  const map = {
+function getToolCursor(tool) {
+  const cursors = {
     pen: 'crosshair', pencil: 'crosshair', marker: 'crosshair', calligraphy: 'crosshair',
     crayon: 'crosshair', spray: 'crosshair', neon: 'crosshair', drip: 'crosshair', sparkle: 'crosshair',
-    eraser: 'cell', fill: 'cell', eyedropper: 'crosshair',
-    text: 'text', magnifier: 'zoom-in',
+    eraser: 'cell', fill: 'cell', eyedropper: 'crosshair', text: 'text', magnifier: 'zoom-in',
     'select-rect': 'default', lasso: 'default', crop: 'crosshair',
-    line: 'crosshair', rect: 'crosshair', rndrect: 'crosshair',
-    circle: 'crosshair', triangle: 'crosshair', diamond: 'crosshair',
-    star5: 'crosshair', star4: 'crosshair', arrow: 'crosshair',
-    heart: 'crosshair', lightning: 'crosshair', callout: 'crosshair',
-    hexagon: 'crosshair', curve: 'crosshair', polygon: 'crosshair', freehand: 'crosshair',
+    line: 'crosshair', rect: 'crosshair', rndrect: 'crosshair', circle: 'crosshair',
+    triangle: 'crosshair', diamond: 'crosshair', star5: 'crosshair', star4: 'crosshair',
+    arrow: 'crosshair', heart: 'crosshair', lightning: 'crosshair', callout: 'crosshair',
+    hexagon: 'crosshair', curve: 'crosshair', polygon: 'crosshair', freehand: 'crosshair'
   };
-  return map[tool] || 'crosshair';
+  return cursors[tool] || 'crosshair';
 }
 
 // ═══════════════════════════════════════════════════════════
-// CANVAS EVENTS (Mouse + Touch)
+// SHARED DRAWING ENGINE (Mouse, Touch, and Hand Tracking)
 // ═══════════════════════════════════════════════════════════
-function bindCanvasEvents() {
+function bindCanvasPointerEvents() {
   const el = canvasOverlay;
 
-  el.addEventListener('mousedown', e => { if (!handMode) onPointerDown(e.offsetX, e.offsetY, e.button); });
-  el.addEventListener('mousemove', e => { if (!handMode) onPointerMove(e.offsetX, e.offsetY); });
-  el.addEventListener('mouseup', () => { if (!handMode) onPointerUp(); });
-  el.addEventListener('mouseleave', () => { if (!handMode) onPointerUp(); });
+  el.addEventListener('mousedown', e => {
+    if (handMode && cameraActive) return; // In hand mode with camera on, ignore physical mouse on canvas
+    if (e.button === 2) {
+      if (CURRENT_TOOL === 'eyedropper') pickColorAt(e.offsetX, e.offsetY, 2);
+      return;
+    }
+    onPointerDown(e.offsetX, e.offsetY);
+  });
+
+  el.addEventListener('mousemove', e => {
+    if (handMode && cameraActive) return;
+    onPointerMove(e.offsetX, e.offsetY);
+  });
+
+  el.addEventListener('mouseup', () => {
+    if (handMode && cameraActive) return;
+    onPointerUp();
+  });
+
+  el.addEventListener('mouseleave', () => {
+    if (handMode && cameraActive) return;
+    onPointerUp();
+  });
+
   el.addEventListener('contextmenu', e => e.preventDefault());
 
+  // Mobile touch support
   el.addEventListener('touchstart', e => {
     e.preventDefault();
-    if (!handMode) {
-      const r = el.getBoundingClientRect();
-      const t = e.touches[0];
-      onPointerDown(t.clientX - r.left, t.clientY - r.top, 0);
-    }
+    if (handMode && cameraActive) return;
+    const r = el.getBoundingClientRect();
+    const t = e.touches[0];
+    onPointerDown(t.clientX - r.left, t.clientY - r.top);
   }, { passive: false });
+
   el.addEventListener('touchmove', e => {
     e.preventDefault();
-    if (!handMode) {
-      const r = el.getBoundingClientRect();
-      const t = e.touches[0];
-      onPointerMove(t.clientX - r.left, t.clientY - r.top);
-    }
+    if (handMode && cameraActive) return;
+    const r = el.getBoundingClientRect();
+    const t = e.touches[0];
+    onPointerMove(t.clientX - r.left, t.clientY - r.top);
   }, { passive: false });
-  el.addEventListener('touchend', () => { if (!handMode) onPointerUp(); });
+
+  el.addEventListener('touchend', () => {
+    if (handMode && cameraActive) return;
+    onPointerUp();
+  });
 }
 
-const SHAPE_TOOLS = new Set(['line','rect','rndrect','circle','triangle','diamond','star5','star4','arrow','heart','lightning','callout','hexagon','curve','polygon','freehand','select-rect','lasso','crop']);
+const SHAPE_TOOL_SET = new Set([
+  'line', 'rect', 'rndrect', 'circle', 'triangle', 'diamond',
+  'star5', 'star4', 'arrow', 'heart', 'lightning', 'callout',
+  'hexagon', 'curve', 'polygon', 'freehand', 'select-rect', 'lasso', 'crop'
+]);
 
-function onPointerDown(x, y, button) {
-  if (CURRENT_TOOL === 'eyedropper') { pickColor(x, y, button); return; }
-  if (CURRENT_TOOL === 'fill') { floodFill(x, y); return; }
-  if (CURRENT_TOOL === 'magnifier') { showMagnifier(x, y); return; }
-  if (CURRENT_TOOL === 'text') { placeText(x, y); return; }
+function onPointerDown(x, y) {
+  if (CURRENT_TOOL === 'eyedropper') { pickColorAt(x, y, 1); return; }
+  if (CURRENT_TOOL === 'fill')       { floodFill(x, y); return; }
+  if (CURRENT_TOOL === 'magnifier')  { showMagnifier(x, y); return; }
+  if (CURRENT_TOOL === 'text')       { prepareTextPlacement(x, y); return; }
 
   pushUndo();
   isDrawing = true;
   startX = x; startY = y;
-  lastX = x; lastY = y;
+  lastX = x;  lastY = y;
   strokePoints = [[x, y]];
-  lassoPoints = [[x, y]];
-  dripPoints = [];
+  lassoPoints  = [[x, y]];
+  dripParticles = [];
 
-  if (!SHAPE_TOOLS.has(CURRENT_TOOL)) {
-    ctxDraw.beginPath();
-    ctxDraw.moveTo(x, y);
+  if (!SHAPE_TOOL_SET.has(CURRENT_TOOL)) {
+    applyBrush(ctxDraw, x, y, x + 0.1, y + 0.1);
+    applySymmetry(x, y, x + 0.1, y + 0.1);
   }
 }
 
@@ -376,8 +482,7 @@ function onPointerMove(x, y) {
   if (!isDrawing) return;
   strokePoints.push([x, y]);
 
-  if (SHAPE_TOOLS.has(CURRENT_TOOL)) {
-    // Preview on overlay
+  if (SHAPE_TOOL_SET.has(CURRENT_TOOL)) {
     ctxOverlay.clearRect(0, 0, canvasW, canvasH);
     drawShapePreview(ctxOverlay, startX, startY, x, y, false);
     if (CURRENT_TOOL === 'lasso' || CURRENT_TOOL === 'freehand') {
@@ -388,7 +493,8 @@ function onPointerMove(x, y) {
     applySymmetry(lastX, lastY, x, y);
   }
 
-  lastX = x; lastY = y;
+  lastX = x;
+  lastY = y;
 }
 
 function onPointerUp() {
@@ -396,507 +502,560 @@ function onPointerUp() {
   isDrawing = false;
   ctxOverlay.clearRect(0, 0, canvasW, canvasH);
 
-  if (SHAPE_TOOLS.has(CURRENT_TOOL)) {
+  if (SHAPE_TOOL_SET.has(CURRENT_TOOL)) {
     drawShapePreview(ctxDraw, startX, startY, lastX, lastY, true);
   }
 
   if (AI_SNAP_LIVE && strokePoints.length > 5) {
-    runAISnap();
+    runAIShapeSnap();
   }
-
-  drawCursorDot(lastX, lastY);
 }
 
 // ═══════════════════════════════════════════════════════════
-// BRUSH ENGINE
+// 9 PROFESSIONAL BRUSH IMPLEMENTATIONS
 // ═══════════════════════════════════════════════════════════
-function getColor(alpha) {
+function getActiveColor(alpha = 1) {
   if (RAINBOW_MODE) {
-    rainbowHue = (rainbowHue + 1.5) % 360;
-    return `hsla(${rainbowHue},100%,55%,${alpha})`;
+    rainbowHue = (rainbowHue + 1.8) % 360;
+    return `hsla(${rainbowHue}, 100%, 50%, ${alpha})`;
   }
-  const r = parseInt(COLOR1.slice(1,3),16);
-  const g = parseInt(COLOR1.slice(3,5),16);
-  const b = parseInt(COLOR1.slice(5,7),16);
-  return `rgba(${r},${g},${b},${alpha})`;
+  const r = parseInt(COLOR1.slice(1, 3), 16) || 0;
+  const g = parseInt(COLOR1.slice(3, 5), 16) || 0;
+  const b = parseInt(COLOR1.slice(5, 7), 16) || 0;
+  return `rgba(${r}, ${g}, ${b}, ${alpha})`;
 }
 
 function applyBrush(ctx, x1, y1, x2, y2) {
-  const a = OPACITY;
-  ctx.globalAlpha = a;
-  ctx.strokeStyle = getColor(1);
-  ctx.fillStyle = getColor(1);
+  ctx.save();
+  ctx.globalCompositeOperation = 'source-over';
+  ctx.globalAlpha = OPACITY;
+  ctx.strokeStyle = getActiveColor(1);
+  ctx.fillStyle   = getActiveColor(1);
   ctx.lineJoin = 'round';
-  ctx.lineCap = 'round';
+  ctx.lineCap  = 'round';
 
   switch (CURRENT_TOOL) {
     case 'pen':
       ctx.lineWidth = BRUSH_SIZE;
-      ctx.beginPath(); ctx.moveTo(x1,y1); ctx.lineTo(x2,y2); ctx.stroke();
+      ctx.beginPath();
+      ctx.moveTo(x1, y1);
+      ctx.lineTo(x2, y2);
+      ctx.stroke();
       break;
 
     case 'pencil': {
-      ctx.lineWidth = BRUSH_SIZE * 0.5;
-      ctx.globalAlpha = a * 0.7;
-      // Slightly noisy
+      ctx.lineWidth = Math.max(1, BRUSH_SIZE * 0.45);
+      ctx.globalAlpha = OPACITY * 0.75;
       for (let i = 0; i < 3; i++) {
-        const nx = x2 + (Math.random()-0.5)*BRUSH_SIZE*0.4;
-        const ny = y2 + (Math.random()-0.5)*BRUSH_SIZE*0.4;
-        ctx.beginPath(); ctx.moveTo(x1,y1); ctx.lineTo(nx,ny); ctx.stroke();
+        const jitter = (Math.random() - 0.5) * (BRUSH_SIZE * 0.4);
+        ctx.beginPath();
+        ctx.moveTo(x1 + jitter, y1 + jitter);
+        ctx.lineTo(x2 + jitter, y2 + jitter);
+        ctx.stroke();
       }
       break;
     }
 
     case 'marker': {
       ctx.lineWidth = BRUSH_SIZE * 2.5;
-      ctx.globalAlpha = a * 0.4;
-      ctx.beginPath(); ctx.moveTo(x1,y1); ctx.lineTo(x2,y2); ctx.stroke();
+      ctx.globalAlpha = OPACITY * 0.4;
+      ctx.lineCap = 'square';
+      ctx.beginPath();
+      ctx.moveTo(x1, y1);
+      ctx.lineTo(x2, y2);
+      ctx.stroke();
       break;
     }
 
     case 'calligraphy': {
       const angle = Math.PI / 4;
-      ctx.lineWidth = 1;
-      ctx.globalAlpha = a;
+      const cosA = Math.cos(angle) * BRUSH_SIZE * 0.8;
+      const sinA = Math.sin(angle) * BRUSH_SIZE * 0.8;
       ctx.beginPath();
-      ctx.moveTo(x1 + Math.cos(angle)*BRUSH_SIZE, y1 + Math.sin(angle)*BRUSH_SIZE);
-      ctx.lineTo(x2 + Math.cos(angle)*BRUSH_SIZE, y2 + Math.sin(angle)*BRUSH_SIZE);
-      ctx.lineTo(x2 - Math.cos(angle)*BRUSH_SIZE, y2 - Math.sin(angle)*BRUSH_SIZE);
-      ctx.lineTo(x1 - Math.cos(angle)*BRUSH_SIZE, y1 - Math.sin(angle)*BRUSH_SIZE);
-      ctx.closePath(); ctx.fill();
+      ctx.moveTo(x1 - cosA, y1 - sinA);
+      ctx.lineTo(x1 + cosA, y1 + sinA);
+      ctx.lineTo(x2 + cosA, y2 + sinA);
+      ctx.lineTo(x2 - cosA, y2 - sinA);
+      ctx.closePath();
+      ctx.fill();
       break;
     }
 
     case 'crayon': {
-      const r2 = BRUSH_SIZE;
-      ctx.globalAlpha = a * 0.15;
-      for (let i = 0; i < 40; i++) {
+      ctx.globalAlpha = OPACITY * 0.15;
+      const count = Math.max(20, BRUSH_SIZE * 4);
+      for (let i = 0; i < count; i++) {
         const t = Math.random();
-        const bx = x1 + (x2-x1)*t + (Math.random()-0.5)*r2*2;
-        const by = y1 + (y2-y1)*t + (Math.random()-0.5)*r2*2;
-        ctx.fillRect(bx, by, 1.5, 1.5);
+        const rx = x1 + (x2 - x1) * t + (Math.random() - 0.5) * BRUSH_SIZE * 1.8;
+        const ry = y1 + (y2 - y1) * t + (Math.random() - 0.5) * BRUSH_SIZE * 1.8;
+        ctx.fillRect(rx, ry, 1.8, 1.8);
       }
       break;
     }
 
     case 'spray': {
-      ctx.globalAlpha = a * 0.1;
-      const sr = BRUSH_SIZE * 1.5;
-      for (let i = 0; i < 50; i++) {
+      ctx.globalAlpha = OPACITY * 0.1;
+      const sprayRadius = BRUSH_SIZE * 1.8;
+      const drops = Math.max(30, BRUSH_SIZE * 6);
+      for (let i = 0; i < drops; i++) {
         const ang = Math.random() * Math.PI * 2;
-        const dist = Math.random() * sr;
-        ctx.fillRect(x2 + Math.cos(ang)*dist, y2 + Math.sin(ang)*dist, 1.5, 1.5);
+        const dist = Math.random() * sprayRadius;
+        ctx.fillRect(x2 + Math.cos(ang) * dist, y2 + Math.sin(ang) * dist, 1.5, 1.5);
       }
       break;
     }
 
     case 'neon': {
-      // Glow effect: 3 strokes, widest outermost
-      [BRUSH_SIZE*4, BRUSH_SIZE*2, BRUSH_SIZE*0.5].forEach((w, i) => {
-        ctx.globalAlpha = a * [0.05, 0.15, 1][i];
-        ctx.lineWidth = w;
-        ctx.beginPath(); ctx.moveTo(x1,y1); ctx.lineTo(x2,y2); ctx.stroke();
+      const layers = [
+        { width: BRUSH_SIZE * 5, alpha: 0.05 },
+        { width: BRUSH_SIZE * 2.5, alpha: 0.2 },
+        { width: BRUSH_SIZE * 0.7, alpha: 1.0 }
+      ];
+      layers.forEach(l => {
+        ctx.globalAlpha = OPACITY * l.alpha;
+        ctx.lineWidth = l.width;
+        ctx.beginPath();
+        ctx.moveTo(x1, y1);
+        ctx.lineTo(x2, y2);
+        ctx.stroke();
       });
       break;
     }
 
     case 'drip': {
       ctx.lineWidth = BRUSH_SIZE;
-      ctx.beginPath(); ctx.moveTo(x1,y1); ctx.lineTo(x2,y2); ctx.stroke();
-      // random drip extend
-      if (Math.random() < 0.08) {
-        dripPoints.push({x:x2, y:y2, len:0, maxLen: 20+Math.random()*60});
+      ctx.beginPath();
+      ctx.moveTo(x1, y1);
+      ctx.lineTo(x2, y2);
+      ctx.stroke();
+
+      if (Math.random() < 0.1) {
+        dripParticles.push({ x: x2, y: y2, length: 0, maxLength: BRUSH_SIZE * (3 + Math.random() * 8) });
       }
-      ctx.lineWidth = BRUSH_SIZE * 0.6;
-      dripPoints.forEach(dp => {
-        dp.len += 2;
-        ctx.globalAlpha = a * (1 - dp.len/dp.maxLen);
-        ctx.beginPath(); ctx.moveTo(dp.x, dp.y); ctx.lineTo(dp.x, dp.y + dp.len); ctx.stroke();
+      ctx.lineWidth = Math.max(1, BRUSH_SIZE * 0.5);
+      dripParticles.forEach(dp => {
+        dp.length += 2.5;
+        ctx.globalAlpha = OPACITY * Math.max(0, 1 - dp.length / dp.maxLength);
+        ctx.beginPath();
+        ctx.moveTo(dp.x, dp.y);
+        ctx.lineTo(dp.x, dp.y + dp.length);
+        ctx.stroke();
       });
-      dripPoints = dripPoints.filter(dp => dp.len < dp.maxLen);
+      dripParticles = dripParticles.filter(dp => dp.length < dp.maxLength);
       break;
     }
 
     case 'sparkle': {
-      ctx.globalAlpha = a;
-      const spCount = Math.ceil(BRUSH_SIZE / 2);
-      for (let i = 0; i < spCount; i++) {
-        const sx = x2 + (Math.random()-0.5)*BRUSH_SIZE*3;
-        const sy = y2 + (Math.random()-0.5)*BRUSH_SIZE*3;
-        const sr2 = Math.random()*2+0.5;
+      const sparkles = Math.max(3, Math.ceil(BRUSH_SIZE / 2));
+      for (let i = 0; i < sparkles; i++) {
+        const sx = x2 + (Math.random() - 0.5) * BRUSH_SIZE * 3.5;
+        const sy = y2 + (Math.random() - 0.5) * BRUSH_SIZE * 3.5;
+        const r = Math.random() * 2.5 + 0.5;
         ctx.beginPath();
-        ctx.arc(sx, sy, sr2, 0, Math.PI*2);
+        ctx.arc(sx, sy, r, 0, Math.PI * 2);
         ctx.fill();
       }
       break;
     }
 
     case 'eraser': {
-      ctx.globalAlpha = 1;
       ctx.globalCompositeOperation = 'destination-out';
-      ctx.lineWidth = BRUSH_SIZE * 2;
-      ctx.beginPath(); ctx.moveTo(x1,y1); ctx.lineTo(x2,y2); ctx.stroke();
-      ctx.globalCompositeOperation = 'source-over';
-      return;
+      ctx.globalAlpha = 1;
+      ctx.lineWidth = BRUSH_SIZE * 2.2;
+      ctx.beginPath();
+      ctx.moveTo(x1, y1);
+      ctx.lineTo(x2, y2);
+      ctx.stroke();
+      break;
     }
   }
-  ctx.globalAlpha = 1;
+
+  ctx.restore();
 }
 
 // ═══════════════════════════════════════════════════════════
-// SHAPE DRAWING
+// 16 PRECISION VECTOR SHAPES
 // ═══════════════════════════════════════════════════════════
 function drawShapePreview(ctx, x1, y1, x2, y2, commit) {
   const tool = CURRENT_TOOL;
   ctx.save();
-  ctx.globalAlpha = commit ? OPACITY : OPACITY * 0.8;
-  ctx.strokeStyle = getColor(1);
-  ctx.fillStyle = COLOR2;
-  ctx.lineWidth = BRUSH_SIZE;
-  ctx.lineJoin = 'round';
-  ctx.lineCap = 'round';
+  ctx.globalCompositeOperation = 'source-over';
+  ctx.globalAlpha = commit ? OPACITY : OPACITY * 0.75;
+  ctx.strokeStyle = getActiveColor(1);
+  ctx.fillStyle   = COLOR2;
+  ctx.lineWidth   = BRUSH_SIZE;
+  ctx.lineJoin    = 'round';
+  ctx.lineCap     = 'round';
 
   const w = x2 - x1, h = y2 - y1;
-  const cx = (x1+x2)/2, cy = (y1+y2)/2;
+  const cx = (x1 + x2) / 2, cy = (y1 + y2) / 2;
+  const radius = Math.min(Math.abs(w), Math.abs(h)) / 2;
 
   ctx.beginPath();
-  switch(tool) {
+  switch (tool) {
     case 'line':
-      ctx.moveTo(x1,y1); ctx.lineTo(x2,y2);
-      _stroke(ctx);
+      ctx.moveTo(x1, y1);
+      ctx.lineTo(x2, y2);
+      strokeShape(ctx);
       break;
+
     case 'rect':
-      ctx.rect(x1,y1,w,h);
-      _fillStroke(ctx);
+      ctx.rect(x1, y1, w, h);
+      renderFillStroke(ctx);
       break;
+
     case 'rndrect': {
-      const r = Math.min(Math.abs(w),Math.abs(h))*0.15;
-      ctx.roundRect ? ctx.roundRect(x1,y1,w,h,r) : ctx.rect(x1,y1,w,h);
-      _fillStroke(ctx);
+      const cornerR = Math.min(Math.abs(w), Math.abs(h)) * 0.15;
+      if (ctx.roundRect) ctx.roundRect(x1, y1, w, h, cornerR);
+      else ctx.rect(x1, y1, w, h);
+      renderFillStroke(ctx);
       break;
     }
+
     case 'circle':
-      ctx.ellipse(cx,cy,Math.abs(w)/2,Math.abs(h)/2,0,0,Math.PI*2);
-      _fillStroke(ctx);
+      ctx.ellipse(cx, cy, Math.abs(w) / 2, Math.abs(h) / 2, 0, 0, Math.PI * 2);
+      renderFillStroke(ctx);
       break;
+
     case 'triangle':
-      ctx.moveTo(cx,y1); ctx.lineTo(x2,y2); ctx.lineTo(x1,y2); ctx.closePath();
-      _fillStroke(ctx);
+      ctx.moveTo(cx, y1);
+      ctx.lineTo(x2, y2);
+      ctx.lineTo(x1, y2);
+      ctx.closePath();
+      renderFillStroke(ctx);
       break;
+
     case 'diamond':
-      ctx.moveTo(cx,y1); ctx.lineTo(x2,cy); ctx.lineTo(cx,y2); ctx.lineTo(x1,cy); ctx.closePath();
-      _fillStroke(ctx);
+      ctx.moveTo(cx, y1);
+      ctx.lineTo(x2, cy);
+      ctx.lineTo(cx, y2);
+      ctx.lineTo(x1, cy);
+      ctx.closePath();
+      renderFillStroke(ctx);
       break;
+
     case 'star5':
-      _starPath(ctx, cx, cy, 5, Math.min(Math.abs(w),Math.abs(h))/2, Math.min(Math.abs(w),Math.abs(h))/4.5);
-      _fillStroke(ctx);
+      drawStarPath(ctx, cx, cy, 5, radius, radius * 0.42);
+      renderFillStroke(ctx);
       break;
+
     case 'star4':
-      _starPath(ctx, cx, cy, 4, Math.min(Math.abs(w),Math.abs(h))/2, Math.min(Math.abs(w),Math.abs(h))/4);
-      _fillStroke(ctx);
+      drawStarPath(ctx, cx, cy, 4, radius, radius * 0.38);
+      renderFillStroke(ctx);
       break;
+
     case 'hexagon':
-      _polygonPath(ctx, cx, cy, 6, Math.min(Math.abs(w),Math.abs(h))/2);
-      _fillStroke(ctx);
+      drawPolygonPath(ctx, cx, cy, 6, radius);
+      renderFillStroke(ctx);
       break;
+
     case 'polygon':
-      _polygonPath(ctx, cx, cy, polygonSides, Math.min(Math.abs(w),Math.abs(h))/2);
-      _fillStroke(ctx);
+      drawPolygonPath(ctx, cx, cy, polygonSides, radius);
+      renderFillStroke(ctx);
       break;
+
     case 'arrow':
-      _arrowPath(ctx, x1, y1, x2, y2, BRUSH_SIZE*2);
-      _fillStroke(ctx);
+      drawArrowPath(ctx, x1, y1, x2, y2, BRUSH_SIZE * 2.8);
+      strokeShape(ctx);
       break;
+
     case 'heart':
-      _heartPath(ctx, cx, cy, Math.min(Math.abs(w),Math.abs(h))/2);
-      _fillStroke(ctx);
+      drawHeartPath(ctx, cx, cy, radius);
+      renderFillStroke(ctx);
       break;
+
     case 'lightning':
-      _lightningPath(ctx, x1, y1, x2, y2);
-      _fillStroke(ctx);
+      drawLightningPath(ctx, x1, y1, x2, y2);
+      strokeShape(ctx);
       break;
+
     case 'callout':
-      _calloutPath(ctx, x1, y1, w, h);
-      _fillStroke(ctx);
+      drawCalloutPath(ctx, x1, y1, w, h);
+      renderFillStroke(ctx);
       break;
+
     case 'curve':
-      if (!curveControl) {
-        curveControl = { x: cx, y: y1 };
-      }
-      ctx.moveTo(x1,y1);
+      if (!curveControl) curveControl = { x: cx, y: y1 };
+      ctx.moveTo(x1, y1);
       ctx.quadraticCurveTo(curveControl.x, curveControl.y, x2, y2);
-      _stroke(ctx);
+      strokeShape(ctx);
       if (commit) curveControl = null;
       break;
+
     case 'freehand':
     case 'lasso':
       if (strokePoints.length > 1) {
         ctx.moveTo(strokePoints[0][0], strokePoints[0][1]);
         strokePoints.forEach(p => ctx.lineTo(p[0], p[1]));
         ctx.closePath();
-        _fillStroke(ctx);
+        renderFillStroke(ctx);
       }
       break;
-    case 'select-rect': {
-      ctx.setLineDash([6,4]);
+
+    case 'select-rect':
+      ctx.setLineDash([6, 4]);
       ctx.strokeStyle = '#00aaff';
-      ctx.fillStyle = 'rgba(0,170,255,0.1)';
-      ctx.lineWidth = 2;
-      ctx.rect(x1,y1,w,h);
-      _fillStroke(ctx);
+      ctx.fillStyle   = 'rgba(0, 170, 255, 0.08)';
+      ctx.lineWidth   = 2;
+      ctx.rect(x1, y1, w, h);
+      renderFillStroke(ctx);
       ctx.setLineDash([]);
       break;
-    }
-    case 'crop': {
-      ctx.setLineDash([6,4]);
-      ctx.strokeStyle = '#ff6600';
-      ctx.lineWidth = 2;
-      ctx.rect(x1,y1,w,h);
-      _stroke(ctx);
+
+    case 'crop':
+      ctx.setLineDash([6, 4]);
+      ctx.strokeStyle = '#ff7700';
+      ctx.lineWidth   = 2;
+      ctx.rect(x1, y1, w, h);
+      strokeShape(ctx);
       ctx.setLineDash([]);
-      if (commit) cropCanvas(x1, y1, x2, y2);
+      if (commit) applyCrop(x1, y1, x2, y2);
       break;
-    }
   }
+
   ctx.restore();
 }
 
-function _stroke(ctx) {
-  if (SHAPE_FILL === 'fill') {
-    ctx.fill();
-  } else {
-    ctx.stroke();
-  }
+function strokeShape(ctx) {
+  if (SHAPE_FILL === 'fill') ctx.fill();
+  else ctx.stroke();
 }
 
-function _fillStroke(ctx) {
+function renderFillStroke(ctx) {
   if (SHAPE_FILL === 'fill' || SHAPE_FILL === 'both') ctx.fill();
   if (SHAPE_FILL === 'outline' || SHAPE_FILL === 'both') ctx.stroke();
 }
 
-function _starPath(ctx, cx, cy, points, outer, inner) {
-  for (let i = 0; i < points*2; i++) {
-    const r = i%2===0 ? outer : inner;
-    const a = (i * Math.PI / points) - Math.PI/2;
-    if (i===0) ctx.moveTo(cx+r*Math.cos(a), cy+r*Math.sin(a));
-    else ctx.lineTo(cx+r*Math.cos(a), cy+r*Math.sin(a));
+function drawStarPath(ctx, cx, cy, points, outer, inner) {
+  for (let i = 0; i < points * 2; i++) {
+    const r = (i % 2 === 0) ? outer : inner;
+    const a = (i * Math.PI / points) - Math.PI / 2;
+    if (i === 0) ctx.moveTo(cx + r * Math.cos(a), cy + r * Math.sin(a));
+    else ctx.lineTo(cx + r * Math.cos(a), cy + r * Math.sin(a));
   }
   ctx.closePath();
 }
 
-function _polygonPath(ctx, cx, cy, sides, r) {
+function drawPolygonPath(ctx, cx, cy, sides, r) {
   for (let i = 0; i < sides; i++) {
-    const a = (i * 2 * Math.PI / sides) - Math.PI/2;
-    if (i===0) ctx.moveTo(cx+r*Math.cos(a), cy+r*Math.sin(a));
-    else ctx.lineTo(cx+r*Math.cos(a), cy+r*Math.sin(a));
+    const a = (i * 2 * Math.PI / sides) - Math.PI / 2;
+    if (i === 0) ctx.moveTo(cx + r * Math.cos(a), cy + r * Math.sin(a));
+    else ctx.lineTo(cx + r * Math.cos(a), cy + r * Math.sin(a));
   }
   ctx.closePath();
 }
 
-function _arrowPath(ctx, x1, y1, x2, y2, hw) {
-  const angle = Math.atan2(y2-y1, x2-x1);
+function drawArrowPath(ctx, x1, y1, x2, y2, headSize) {
+  const angle = Math.atan2(y2 - y1, x2 - x1);
   ctx.moveTo(x1, y1);
   ctx.lineTo(x2, y2);
   ctx.moveTo(x2, y2);
-  ctx.lineTo(x2 - hw*Math.cos(angle-Math.PI/6), y2 - hw*Math.sin(angle-Math.PI/6));
+  ctx.lineTo(x2 - headSize * Math.cos(angle - Math.PI / 6), y2 - headSize * Math.sin(angle - Math.PI / 6));
   ctx.moveTo(x2, y2);
-  ctx.lineTo(x2 - hw*Math.cos(angle+Math.PI/6), y2 - hw*Math.sin(angle+Math.PI/6));
+  ctx.lineTo(x2 - headSize * Math.cos(angle + Math.PI / 6), y2 - headSize * Math.sin(angle + Math.PI / 6));
 }
 
-function _heartPath(ctx, cx, cy, r) {
-  ctx.moveTo(cx, cy + r * 0.3);
-  ctx.bezierCurveTo(cx - r*2, cy - r*1.2, cx - r*2, cy + r*0.5, cx, cy + r*1.2);
-  ctx.bezierCurveTo(cx + r*2, cy + r*0.5, cx + r*2, cy - r*1.2, cx, cy + r*0.3);
+function drawHeartPath(ctx, cx, cy, r) {
+  ctx.moveTo(cx, cy + r * 0.35);
+  ctx.bezierCurveTo(cx - r * 2, cy - r * 1.2, cx - r * 2, cy + r * 0.5, cx, cy + r * 1.25);
+  ctx.bezierCurveTo(cx + r * 2, cy + r * 0.5, cx + r * 2, cy - r * 1.2, cx, cy + r * 0.35);
 }
 
-function _lightningPath(ctx, x1, y1, x2, y2) {
-  const mx = (x1+x2)/2, my = (y1+y2)/2;
-  const dx = (x2-x1)*0.3, dy = (y2-y1)*0.3;
+function drawLightningPath(ctx, x1, y1, x2, y2) {
+  const mx = (x1 + x2) / 2, my = (y1 + y2) / 2;
+  const dx = (x2 - x1) * 0.3, dy = (y2 - y1) * 0.3;
   ctx.moveTo(x1, y1);
-  ctx.lineTo(mx+dy, my-dx);
-  ctx.lineTo(mx-dy*0.5, my+dx*0.5);
+  ctx.lineTo(mx + dy, my - dx);
+  ctx.lineTo(mx - dy * 0.5, my + dx * 0.5);
   ctx.lineTo(x2, y2);
 }
 
-function _calloutPath(ctx, x1, y1, w, h) {
-  const tailX = x1, tailY = y1 + h + Math.abs(h)*0.3;
-  const r2 = 10;
-  ctx.roundRect ? ctx.roundRect(x1, y1, w, h, r2) : ctx.rect(x1, y1, w, h);
-  ctx.moveTo(x1 + Math.abs(w)*0.2, y1+h);
-  ctx.lineTo(tailX, tailY);
-  ctx.lineTo(x1 + Math.abs(w)*0.4, y1+h);
+function drawCalloutPath(ctx, x1, y1, w, h) {
+  const cornerR = 10;
+  if (ctx.roundRect) ctx.roundRect(x1, y1, w, h, cornerR);
+  else ctx.rect(x1, y1, w, h);
+  const tailY = y1 + h + Math.abs(h) * 0.3;
+  ctx.moveTo(x1 + Math.abs(w) * 0.2, y1 + h);
+  ctx.lineTo(x1, tailY);
+  ctx.lineTo(x1 + Math.abs(w) * 0.4, y1 + h);
 }
 
 // ═══════════════════════════════════════════════════════════
-// SYMMETRY
+// SYMMETRY MIRRORING & MANDALAS
 // ═══════════════════════════════════════════════════════════
 function applySymmetry(x1, y1, x2, y2) {
   if (SYMMETRY === 'none') return;
   const W = canvasW, H = canvasH;
-  const cx = W/2, cy = H/2;
-
-  function mirrorBrush(nx1, ny1, nx2, ny2) {
-    applyBrushRaw(ctxDraw, nx1, ny1, nx2, ny2);
-  }
+  const cx = W / 2, cy = H / 2;
 
   if (SYMMETRY === 'mirror_h' || SYMMETRY === 'quad') {
-    mirrorBrush(W-x1, y1, W-x2, y2);
+    // Vertical axis mirror (Left <-> Right)
+    applyBrush(ctxDraw, W - x1, y1, W - x2, y2);
   }
   if (SYMMETRY === 'mirror_v' || SYMMETRY === 'quad') {
-    mirrorBrush(x1, H-y1, x2, H-y2);
+    // Horizontal axis mirror (Top <-> Bottom)
+    applyBrush(ctxDraw, x1, H - y1, x2, H - y2);
   }
   if (SYMMETRY === 'quad') {
-    mirrorBrush(W-x1, H-y1, W-x2, H-y2);
+    // 4-way diagonal mirror
+    applyBrush(ctxDraw, W - x1, H - y1, W - x2, H - y2);
   }
   if (SYMMETRY === 'radial4' || SYMMETRY === 'radial8') {
-    const steps = SYMMETRY === 'radial4' ? 4 : 8;
+    const steps = (SYMMETRY === 'radial4') ? 4 : 8;
     for (let i = 1; i < steps; i++) {
-      const ang = (Math.PI*2/steps)*i;
-      const cos = Math.cos(ang), sin = Math.sin(ang);
-      const rx1 = cx + (x1-cx)*cos - (y1-cy)*sin;
-      const ry1 = cy + (x1-cx)*sin + (y1-cy)*cos;
-      const rx2 = cx + (x2-cx)*cos - (y2-cy)*sin;
-      const ry2 = cy + (x2-cx)*sin + (y2-cy)*cos;
-      mirrorBrush(rx1, ry1, rx2, ry2);
+      const ang = (Math.PI * 2 / steps) * i;
+      const cosA = Math.cos(ang), sinA = Math.sin(ang);
+      const rx1 = cx + (x1 - cx) * cosA - (y1 - cy) * sinA;
+      const ry1 = cy + (x1 - cx) * sinA + (y1 - cy) * cosA;
+      const rx2 = cx + (x2 - cx) * cosA - (y2 - cy) * sinA;
+      const ry2 = cy + (x2 - cx) * sinA + (y2 - cy) * cosA;
+      applyBrush(ctxDraw, rx1, ry1, rx2, ry2);
     }
   }
 }
 
-function applyBrushRaw(ctx, x1, y1, x2, y2) {
-  const prevTool = CURRENT_TOOL;
-  applyBrush(ctx, x1, y1, x2, y2);
-}
-
 // ═══════════════════════════════════════════════════════════
-// PAINT TOOLS
+// PAINT BUCKET, EYEDROPPER, TEXT, MAGNIFIER & CROP
 // ═══════════════════════════════════════════════════════════
 function floodFill(startX, startY) {
   pushUndo();
   const imgData = ctxDraw.getImageData(0, 0, canvasW, canvasH);
   const data = imgData.data;
-  const idx = (Math.round(startY) * canvasW + Math.round(startX)) * 4;
-  const tr = data[idx], tg = data[idx+1], tb = data[idx+2], ta = data[idx+3];
 
-  const cr = parseInt(COLOR1.slice(1,3),16);
-  const cg = parseInt(COLOR1.slice(3,5),16);
-  const cb = parseInt(COLOR1.slice(5,7),16);
+  const sx = Math.max(0, Math.min(canvasW - 1, Math.round(startX)));
+  const sy = Math.max(0, Math.min(canvasH - 1, Math.round(startY)));
+  const idx = (sy * canvasW + sx) * 4;
+  const tr = data[idx], tg = data[idx + 1], tb = data[idx + 2], ta = data[idx + 3];
+
+  const cr = parseInt(COLOR1.slice(1, 3), 16) || 0;
+  const cg = parseInt(COLOR1.slice(3, 5), 16) || 0;
+  const cb = parseInt(COLOR1.slice(5, 7), 16) || 0;
   const ca = Math.round(OPACITY * 255);
 
-  if (tr===cr && tg===cg && tb===cb && ta===ca) return;
+  if (tr === cr && tg === cg && tb === cb && ta === ca) return;
 
-  const stack = [[Math.round(startX), Math.round(startY)]];
+  const stack = [[sx, sy]];
   const visited = new Uint8Array(canvasW * canvasH);
-  const THRESHOLD = 30;
+  const THRESHOLD = 28;
 
-  function colorMatch(i) {
-    return Math.abs(data[i]-tr) + Math.abs(data[i+1]-tg) + Math.abs(data[i+2]-tb) + Math.abs(data[i+3]-ta) < THRESHOLD;
+  function matchesTarget(i) {
+    return Math.abs(data[i] - tr) +
+           Math.abs(data[i + 1] - tg) +
+           Math.abs(data[i + 2] - tb) +
+           Math.abs(data[i + 3] - ta) <= THRESHOLD;
   }
 
-  while (stack.length) {
+  while (stack.length > 0) {
     const [x, y] = stack.pop();
-    if (x<0||x>=canvasW||y<0||y>=canvasH) continue;
-    const i4 = (y*canvasW+x)*4;
-    if (visited[y*canvasW+x]) continue;
-    if (!colorMatch(i4)) continue;
-    visited[y*canvasW+x] = 1;
-    data[i4]=cr; data[i4+1]=cg; data[i4+2]=cb; data[i4+3]=ca;
-    stack.push([x+1,y],[x-1,y],[x,y+1],[x,y-1]);
+    if (x < 0 || x >= canvasW || y < 0 || y >= canvasH) continue;
+    const pixelIndex = y * canvasW + x;
+    if (visited[pixelIndex]) continue;
+    const i4 = pixelIndex * 4;
+    if (!matchesTarget(i4)) continue;
+
+    visited[pixelIndex] = 1;
+    data[i4]     = cr;
+    data[i4 + 1] = cg;
+    data[i4 + 2] = cb;
+    data[i4 + 3] = ca;
+
+    stack.push([x + 1, y], [x - 1, y], [x, y + 1], [x, y - 1]);
   }
+
   ctxDraw.putImageData(imgData, 0, 0);
-  showToast('🪣 Fill applied');
+  showToast('🪣 Flood fill complete');
 }
 
-function pickColor(x, y, button) {
+function pickColorAt(x, y, buttonNum) {
   const pixel = ctxDraw.getImageData(Math.round(x), Math.round(y), 1, 1).data;
-  const hex = '#' + [pixel[0],pixel[1],pixel[2]].map(v=>v.toString(16).padStart(2,'0')).join('');
-  if (button === 2) setColor2(hex);
+  const hex = '#' + [pixel[0], pixel[1], pixel[2]]
+    .map(v => v.toString(16).padStart(2, '0')).join('');
+  if (buttonNum === 2) setColor2(hex);
   else setColor1(hex);
   showToast('Picked: ' + hex);
 }
 
-function placeText(x, y) {
+function prepareTextPlacement(x, y) {
   const wrap = document.getElementById('text-input-wrap');
   wrap.style.display = 'flex';
   const inp = document.getElementById('text-input');
   inp.focus();
-
   textPending = { x, y };
   inp.onkeydown = e => {
-    if (e.key === 'Enter' && textPending) {
-      commitText();
-    }
+    if (e.key === 'Enter') commitTextPlacement();
   };
 }
 
-function commitText() {
+function commitTextPlacement() {
   if (!textPending) return;
-  pushUndo();
   const inp = document.getElementById('text-input');
   const font = document.getElementById('font-select').value;
-  const txt = inp.value;
-  if (!txt) return;
+  const text = inp.value.trim();
+  if (!text) return;
 
+  pushUndo();
   ctxDraw.save();
-  ctxDraw.font = `${BRUSH_SIZE * 3}px "${font}"`;
-  ctxDraw.fillStyle = getColor(1);
+  ctxDraw.font        = `${BRUSH_SIZE * 3.5}px "${font}"`;
+  ctxDraw.fillStyle   = getActiveColor(1);
   ctxDraw.globalAlpha = OPACITY;
-  ctxDraw.fillText(txt, textPending.x, textPending.y);
+  ctxDraw.fillText(text, textPending.x, textPending.y);
   ctxDraw.restore();
+
   inp.value = '';
   textPending = null;
+  document.getElementById('text-input-wrap').style.display = 'none';
   showToast('Text placed');
 }
 
 function showMagnifier(x, y) {
-  const size = 80;
+  const size = 110;
   ctxOverlay.clearRect(0, 0, canvasW, canvasH);
   ctxOverlay.save();
   ctxOverlay.beginPath();
-  ctxOverlay.arc(x, y - size - 10, size/2, 0, Math.PI*2);
+  ctxOverlay.arc(x, y - size - 15, size / 2, 0, Math.PI * 2);
   ctxOverlay.clip();
   ctxOverlay.drawImage(canvasDraw,
-    x - size/(magnifierZoom*2), y - size/(magnifierZoom*2), size/magnifierZoom, size/magnifierZoom,
-    x - size/2, y - size - 10 - size/2, size, size);
+    x - size / (magnifierZoom * 2), y - size / (magnifierZoom * 2),
+    size / magnifierZoom, size / magnifierZoom,
+    x - size / 2, y - size - 15 - size / 2, size, size);
   ctxOverlay.restore();
+
   ctxOverlay.strokeStyle = '#00d4ff';
-  ctxOverlay.lineWidth = 2;
+  ctxOverlay.lineWidth   = 2.5;
   ctxOverlay.beginPath();
-  ctxOverlay.arc(x, y - size - 10, size/2, 0, Math.PI*2);
+  ctxOverlay.arc(x, y - size - 15, size / 2, 0, Math.PI * 2);
   ctxOverlay.stroke();
 }
 
-function cropCanvas(x1, y1, x2, y2) {
+function applyCrop(x1, y1, x2, y2) {
   pushUndo();
-  const cw = Math.abs(x2-x1), ch = Math.abs(y2-y1);
-  const cx = Math.min(x1,x2), cy = Math.min(y1,y2);
-  const img = ctxDraw.getImageData(cx, cy, cw, ch);
+  const cw = Math.abs(x2 - x1);
+  const ch = Math.abs(y2 - y1);
+  const ox = Math.min(x1, x2);
+  const oy = Math.min(y1, y2);
+  if (cw < 4 || ch < 4) return;
+  const croppedData = ctxDraw.getImageData(ox, oy, cw, ch);
   ctxDraw.clearRect(0, 0, canvasW, canvasH);
-  ctxDraw.putImageData(img, cx, cy);
-  showToast('Cropped');
+  ctxDraw.putImageData(croppedData, ox, oy);
+  showToast('Cropped to selection');
 }
 
 // ═══════════════════════════════════════════════════════════
-// COLOR MANAGEMENT
+// CUSTOM COLOR PICKER
 // ═══════════════════════════════════════════════════════════
-function setColor1(hex) {
-  COLOR1 = hex;
-  document.getElementById('color1-swatch').style.background = hex;
-}
-function setColor2(hex) {
-  COLOR2 = hex;
-  document.getElementById('color2-swatch').style.background = hex;
-}
+let colorPickerTarget = 'fg';
 
-let pickerTarget = 'fg';
 function openColorPicker(target) {
-  pickerTarget = target;
+  colorPickerTarget = target;
   document.getElementById('color-picker-modal').style.display = 'flex';
-  updatePickerPreview();
+  updateColorPickerPreview();
 }
+
 function closeColorPicker() {
   document.getElementById('color-picker-modal').style.display = 'none';
 }
-function applyPickerColor(target) {
+
+function applyPickedColor(target) {
   const h = document.getElementById('ph').value;
   const s = document.getElementById('ps').value;
   const l = document.getElementById('pl').value;
@@ -904,310 +1063,324 @@ function applyPickerColor(target) {
   if (target === 'fg') setColor1(hex);
   else setColor2(hex);
 }
-function updatePickerPreview() {
-  const h = document.getElementById('ph').value;
-  const s = document.getElementById('ps').value;
-  const l = document.getElementById('pl').value;
-  const hex = hslToHex(h, s, l);
-  document.getElementById('picker-preview').style.background = hex;
-  document.getElementById('phex').value = hex;
+
+function updateColorPickerPreview() {
+  const ph = document.getElementById('ph');
+  const ps = document.getElementById('ps');
+  const pl = document.getElementById('pl');
+  if (!ph) return;
+  const hex = hslToHex(ph.value, ps.value, pl.value);
+  const preview = document.getElementById('picker-preview');
+  const phex = document.getElementById('phex');
+  if (preview) preview.style.background = hex;
+  if (phex) phex.value = hex;
 }
 
-function drawColorWheel() {
+function initColorWheel() {
   const c = document.getElementById('color-wheel-canvas');
+  if (!c) return;
   const ctx = c.getContext('2d');
-  const cx = c.width/2, cy = c.height/2, r = cx - 5;
+  const cx = c.width / 2, cy = c.height / 2, r = cx - 6;
   for (let angle = 0; angle < 360; angle++) {
-    const a1 = (angle-1) * Math.PI/180;
-    const a2 = (angle+1) * Math.PI/180;
-    const grad = ctx.createRadialGradient(cx,cy,0,cx,cy,r);
+    const a1 = (angle - 1) * Math.PI / 180;
+    const a2 = (angle + 1) * Math.PI / 180;
+    const grad = ctx.createRadialGradient(cx, cy, 0, cx, cy, r);
     grad.addColorStop(0, 'white');
-    grad.addColorStop(1, `hsl(${angle},100%,50%)`);
+    grad.addColorStop(1, `hsl(${angle}, 100%, 50%)`);
     ctx.beginPath();
-    ctx.moveTo(cx,cy);
-    ctx.arc(cx,cy,r,a1,a2);
+    ctx.moveTo(cx, cy);
+    ctx.arc(cx, cy, r, a1, a2);
     ctx.closePath();
     ctx.fillStyle = grad;
     ctx.fill();
   }
-  document.getElementById('color-wheel-canvas').addEventListener('click', e => {
+
+  c.addEventListener('click', e => {
     const rect = c.getBoundingClientRect();
     const x = e.clientX - rect.left - cx;
     const y = e.clientY - rect.top - cy;
-    const angle = ((Math.atan2(y,x)*180/Math.PI)+360)%360;
-    const dist = Math.min(Math.sqrt(x*x+y*y)/r, 1);
+    const angle = ((Math.atan2(y, x) * 180 / Math.PI) + 360) % 360;
+    const dist = Math.min(Math.hypot(x, y) / r, 1);
     document.getElementById('ph').value = Math.round(angle);
     document.getElementById('ps').value = Math.round(dist * 100);
-    updatePickerPreview();
+    updateColorPickerPreview();
   });
 }
 
 function hslToHex(h, s, l) {
-  h=+h; s=+s/100; l=+l/100;
-  const a = s * Math.min(l, 1-l);
+  h = +h; s = +s / 100; l = +l / 100;
+  const a = s * Math.min(l, 1 - l);
   const f = n => {
-    const k = (n+h/30)%12;
-    const c = l - a*Math.max(Math.min(k-3,9-k,1),-1);
-    return Math.round(255*c).toString(16).padStart(2,'0');
+    const k = (n + h / 30) % 12;
+    const c = l - a * Math.max(Math.min(k - 3, 9 - k, 1), -1);
+    return Math.round(255 * c).toString(16).padStart(2, '0');
   };
-  return '#'+f(0)+f(8)+f(4);
+  return '#' + f(0) + f(8) + f(4);
 }
 
 function hexToHsl(hex) {
-  const r = parseInt(hex.slice(1,3),16)/255;
-  const g = parseInt(hex.slice(3,5),16)/255;
-  const b = parseInt(hex.slice(5,7),16)/255;
-  const max = Math.max(r,g,b), min = Math.min(r,g,b);
-  let h, s, l = (max+min)/2;
-  if (max===min) { h=s=0; }
-  else {
-    const d = max-min;
-    s = l>0.5 ? d/(2-max-min) : d/(max+min);
-    switch(max) {
-      case r: h=(g-b)/d+(g<b?6:0); break;
-      case g: h=(b-r)/d+2; break;
-      case b: h=(r-g)/d+4; break;
+  if (!hex || hex.length < 7) return null;
+  const r = parseInt(hex.slice(1, 3), 16) / 255;
+  const g = parseInt(hex.slice(3, 5), 16) / 255;
+  const b = parseInt(hex.slice(5, 7), 16) / 255;
+  const max = Math.max(r, g, b), min = Math.min(r, g, b);
+  let h = 0, s = 0, l = (max + min) / 2;
+  if (max !== min) {
+    const d = max - min;
+    s = l > 0.5 ? d / (2 - max - min) : d / (max + min);
+    switch (max) {
+      case r: h = (g - b) / d + (g < b ? 6 : 0); break;
+      case g: h = (b - r) / d + 2; break;
+      case b: h = (r - g) / d + 4; break;
     }
-    h*=60;
+    h *= 60;
   }
-  return { h: Math.round(h), s: Math.round(s*100), l: Math.round(l*100) };
+  return { h: Math.round(h), s: Math.round(s * 100), l: Math.round(l * 100) };
 }
 
 // ═══════════════════════════════════════════════════════════
-// BACKGROUND
+// BACKGROUND PRESETS
 // ═══════════════════════════════════════════════════════════
 function renderBackground() {
-  ctxBg.clearRect(0,0,canvasW,canvasH);
-  switch(BACKGROUND) {
+  if (!ctxBg) return;
+  ctxBg.clearRect(0, 0, canvasW, canvasH);
+  switch (BACKGROUND) {
     case 'white':
-      ctxBg.fillStyle = '#FFFFFF'; ctxBg.fillRect(0,0,canvasW,canvasH); break;
+      ctxBg.fillStyle = '#FFFFFF';
+      ctxBg.fillRect(0, 0, canvasW, canvasH);
+      break;
+
     case 'black':
-      ctxBg.fillStyle = '#000000'; ctxBg.fillRect(0,0,canvasW,canvasH); break;
-    case 'grid': {
-      ctxBg.fillStyle = '#FFFFFF'; ctxBg.fillRect(0,0,canvasW,canvasH);
-      ctxBg.strokeStyle = '#ddd'; ctxBg.lineWidth = 0.5;
-      for (let x=0;x<canvasW;x+=20) { ctxBg.beginPath(); ctxBg.moveTo(x,0); ctxBg.lineTo(x,canvasH); ctxBg.stroke(); }
-      for (let y=0;y<canvasH;y+=20) { ctxBg.beginPath(); ctxBg.moveTo(0,y); ctxBg.lineTo(canvasW,y); ctxBg.stroke(); }
+      ctxBg.fillStyle = '#0a0a0f';
+      ctxBg.fillRect(0, 0, canvasW, canvasH);
       break;
-    }
-    case 'dotgrid': {
-      ctxBg.fillStyle = '#FFFFFF'; ctxBg.fillRect(0,0,canvasW,canvasH);
-      ctxBg.fillStyle = '#ccc';
-      for (let x=0;x<canvasW;x+=20) for (let y=0;y<canvasH;y+=20) {
-        ctxBg.fillRect(x-1,y-1,2,2);
+
+    case 'grid':
+      ctxBg.fillStyle = '#FFFFFF';
+      ctxBg.fillRect(0, 0, canvasW, canvasH);
+      ctxBg.strokeStyle = '#e0e0e0';
+      ctxBg.lineWidth = 0.5;
+      for (let x = 0; x < canvasW; x += 20) {
+        ctxBg.beginPath(); ctxBg.moveTo(x, 0); ctxBg.lineTo(x, canvasH); ctxBg.stroke();
+      }
+      for (let y = 0; y < canvasH; y += 20) {
+        ctxBg.beginPath(); ctxBg.moveTo(0, y); ctxBg.lineTo(canvasW, y); ctxBg.stroke();
       }
       break;
-    }
-    case 'stars': {
-      ctxBg.fillStyle = '#0a0a1a'; ctxBg.fillRect(0,0,canvasW,canvasH);
-      ctxBg.fillStyle = 'white';
-      for (let i=0;i<300;i++) {
-        const sx=Math.random()*canvasW, sy=Math.random()*canvasH, sr=Math.random()*1.5;
-        ctxBg.beginPath(); ctxBg.arc(sx,sy,sr,0,Math.PI*2); ctxBg.fill();
+
+    case 'dotgrid':
+      ctxBg.fillStyle = '#FFFFFF';
+      ctxBg.fillRect(0, 0, canvasW, canvasH);
+      ctxBg.fillStyle = '#b0b0b0';
+      for (let x = 0; x < canvasW; x += 22) {
+        for (let y = 0; y < canvasH; y += 22) {
+          ctxBg.fillRect(x - 1, y - 1, 2, 2);
+        }
       }
       break;
-    }
-    case 'blueprint': {
-      ctxBg.fillStyle = '#0d2b4a'; ctxBg.fillRect(0,0,canvasW,canvasH);
-      ctxBg.strokeStyle = 'rgba(100,180,255,0.3)'; ctxBg.lineWidth = 0.5;
-      for (let x=0;x<canvasW;x+=30) { ctxBg.beginPath(); ctxBg.moveTo(x,0); ctxBg.lineTo(x,canvasH); ctxBg.stroke(); }
-      for (let y=0;y<canvasH;y+=30) { ctxBg.beginPath(); ctxBg.moveTo(0,y); ctxBg.lineTo(canvasW,y); ctxBg.stroke(); }
-      ctxBg.strokeStyle = 'rgba(100,180,255,0.6)'; ctxBg.lineWidth = 1;
-      for (let x=0;x<canvasW;x+=150) { ctxBg.beginPath(); ctxBg.moveTo(x,0); ctxBg.lineTo(x,canvasH); ctxBg.stroke(); }
-      for (let y=0;y<canvasH;y+=150) { ctxBg.beginPath(); ctxBg.moveTo(0,y); ctxBg.lineTo(canvasW,y); ctxBg.stroke(); }
+
+    case 'stars':
+      ctxBg.fillStyle = '#050515';
+      ctxBg.fillRect(0, 0, canvasW, canvasH);
+      ctxBg.fillStyle = '#FFFFFF';
+      for (let i = 0; i < 350; i++) {
+        const sx = (Math.sin(i * 997) * 0.5 + 0.5) * canvasW;
+        const sy = (Math.cos(i * 631) * 0.5 + 0.5) * canvasH;
+        const sr = (i % 3 === 0) ? 1.5 : 0.8;
+        ctxBg.beginPath(); ctxBg.arc(sx, sy, sr, 0, Math.PI * 2); ctxBg.fill();
+      }
       break;
-    }
-    case 'canvas': {
-      ctxBg.fillStyle = '#f5e9d0'; ctxBg.fillRect(0,0,canvasW,canvasH);
-      // Canvas texture lines
-      ctxBg.strokeStyle = 'rgba(180,150,100,0.15)'; ctxBg.lineWidth = 1;
-      for (let x=0;x<canvasW;x+=4) { ctxBg.beginPath(); ctxBg.moveTo(x,0); ctxBg.lineTo(x,canvasH); ctxBg.stroke(); }
-      for (let y=0;y<canvasH;y+=4) { ctxBg.beginPath(); ctxBg.moveTo(0,y); ctxBg.lineTo(canvasW,y); ctxBg.stroke(); }
+
+    case 'blueprint':
+      ctxBg.fillStyle = '#0b2644';
+      ctxBg.fillRect(0, 0, canvasW, canvasH);
+      ctxBg.strokeStyle = 'rgba(100, 180, 255, 0.2)';
+      ctxBg.lineWidth = 0.5;
+      for (let x = 0; x < canvasW; x += 25) {
+        ctxBg.beginPath(); ctxBg.moveTo(x, 0); ctxBg.lineTo(x, canvasH); ctxBg.stroke();
+      }
+      for (let y = 0; y < canvasH; y += 25) {
+        ctxBg.beginPath(); ctxBg.moveTo(0, y); ctxBg.lineTo(canvasW, y); ctxBg.stroke();
+      }
+      ctxBg.strokeStyle = 'rgba(100, 180, 255, 0.6)';
+      ctxBg.lineWidth = 1;
+      for (let x = 0; x < canvasW; x += 125) {
+        ctxBg.beginPath(); ctxBg.moveTo(x, 0); ctxBg.lineTo(x, canvasH); ctxBg.stroke();
+      }
+      for (let y = 0; y < canvasH; y += 125) {
+        ctxBg.beginPath(); ctxBg.moveTo(0, y); ctxBg.lineTo(canvasW, y); ctxBg.stroke();
+      }
       break;
-    }
+
+    case 'canvas':
+      ctxBg.fillStyle = '#f6edd9';
+      ctxBg.fillRect(0, 0, canvasW, canvasH);
+      ctxBg.strokeStyle = 'rgba(160, 130, 90, 0.1)';
+      ctxBg.lineWidth = 1;
+      for (let x = 0; x < canvasW; x += 4) {
+        ctxBg.beginPath(); ctxBg.moveTo(x, 0); ctxBg.lineTo(x, canvasH); ctxBg.stroke();
+      }
+      for (let y = 0; y < canvasH; y += 4) {
+        ctxBg.beginPath(); ctxBg.moveTo(0, y); ctxBg.lineTo(canvasW, y); ctxBg.stroke();
+      }
+      break;
+
     case 'gradient': {
-      const grad = ctxBg.createLinearGradient(0,0,canvasW,canvasH);
-      grad.addColorStop(0, '#1a0533');
-      grad.addColorStop(0.5, '#0d2b4a');
-      grad.addColorStop(1, '#0a2a0a');
+      const grad = ctxBg.createLinearGradient(0, 0, canvasW, canvasH);
+      grad.addColorStop(0, '#15002b');
+      grad.addColorStop(0.5, '#06203a');
+      grad.addColorStop(1, '#00261a');
       ctxBg.fillStyle = grad;
-      ctxBg.fillRect(0,0,canvasW,canvasH);
+      ctxBg.fillRect(0, 0, canvasW, canvasH);
       break;
     }
   }
 }
 
 // ═══════════════════════════════════════════════════════════
-// EFFECTS / TRANSFORMS
+// FILTERS & IMAGE EFFECTS
 // ═══════════════════════════════════════════════════════════
 function applyFX(fx) {
   pushUndo();
+
   if (fx === 'fliph') {
     const tmp = document.createElement('canvas');
-    tmp.width=canvasW; tmp.height=canvasH;
-    const tc = tmp.getContext('2d');
-    tc.drawImage(canvasDraw,0,0);
-    ctxDraw.clearRect(0,0,canvasW,canvasH);
+    tmp.width = canvasW; tmp.height = canvasH;
+    tmp.getContext('2d').drawImage(canvasDraw, 0, 0);
+    ctxDraw.clearRect(0, 0, canvasW, canvasH);
     ctxDraw.save();
-    ctxDraw.translate(canvasW,0);
-    ctxDraw.scale(-1,1);
-    ctxDraw.drawImage(tmp,0,0);
+    ctxDraw.translate(canvasW, 0);
+    ctxDraw.scale(-1, 1);
+    ctxDraw.drawImage(tmp, 0, 0);
     ctxDraw.restore();
-    showToast('Flipped Horizontal'); return;
+    showToast('↔️ Flipped Horizontally');
+    return;
   }
   if (fx === 'flipv') {
     const tmp = document.createElement('canvas');
-    tmp.width=canvasW; tmp.height=canvasH;
-    const tc = tmp.getContext('2d');
-    tc.drawImage(canvasDraw,0,0);
-    ctxDraw.clearRect(0,0,canvasW,canvasH);
+    tmp.width = canvasW; tmp.height = canvasH;
+    tmp.getContext('2d').drawImage(canvasDraw, 0, 0);
+    ctxDraw.clearRect(0, 0, canvasW, canvasH);
     ctxDraw.save();
-    ctxDraw.translate(0,canvasH);
-    ctxDraw.scale(1,-1);
-    ctxDraw.drawImage(tmp,0,0);
+    ctxDraw.translate(0, canvasH);
+    ctxDraw.scale(1, -1);
+    ctxDraw.drawImage(tmp, 0, 0);
     ctxDraw.restore();
-    showToast('Flipped Vertical'); return;
+    showToast('↕️ Flipped Vertically');
+    return;
   }
   if (fx === 'rot90') {
     const tmp = document.createElement('canvas');
-    tmp.width=canvasH; tmp.height=canvasW;
+    tmp.width = canvasH; tmp.height = canvasW;
     const tc = tmp.getContext('2d');
-    tc.translate(canvasH,0);
-    tc.rotate(Math.PI/2);
-    tc.drawImage(canvasDraw,0,0);
-    ctxDraw.clearRect(0,0,canvasW,canvasH);
-    ctxDraw.drawImage(tmp,0,0,canvasW,canvasH);
-    showToast('Rotated 90°'); return;
+    tc.translate(canvasH, 0);
+    tc.rotate(Math.PI / 2);
+    tc.drawImage(canvasDraw, 0, 0);
+    ctxDraw.clearRect(0, 0, canvasW, canvasH);
+    ctxDraw.drawImage(tmp, 0, 0, canvasW, canvasH);
+    showToast('🔃 Rotated 90°');
+    return;
   }
 
-  const imgData = ctxDraw.getImageData(0,0,canvasW,canvasH);
+  const imgData = ctxDraw.getImageData(0, 0, canvasW, canvasH);
   const d = imgData.data;
 
   if (fx === 'invert') {
-    for (let i=0;i<d.length;i+=4) {
-      d[i]=255-d[i]; d[i+1]=255-d[i+1]; d[i+2]=255-d[i+2];
+    for (let i = 0; i < d.length; i += 4) {
+      d[i]   = 255 - d[i];
+      d[i+1] = 255 - d[i+1];
+      d[i+2] = 255 - d[i+2];
     }
   } else if (fx === 'grayscale') {
-    for (let i=0;i<d.length;i+=4) {
-      const g=0.299*d[i]+0.587*d[i+1]+0.114*d[i+2];
-      d[i]=d[i+1]=d[i+2]=g;
+    for (let i = 0; i < d.length; i += 4) {
+      const g = 0.299 * d[i] + 0.587 * d[i+1] + 0.114 * d[i+2];
+      d[i] = d[i+1] = d[i+2] = g;
     }
   } else if (fx === 'sepia') {
-    for (let i=0;i<d.length;i+=4) {
-      const r=d[i],g=d[i+1],b=d[i+2];
-      d[i]  = Math.min(255, r*0.393+g*0.769+b*0.189);
-      d[i+1]= Math.min(255, r*0.349+g*0.686+b*0.168);
-      d[i+2]= Math.min(255, r*0.272+g*0.534+b*0.131);
+    for (let i = 0; i < d.length; i += 4) {
+      const r = d[i], g = d[i+1], b = d[i+2];
+      d[i]   = Math.min(255, r * 0.393 + g * 0.769 + b * 0.189);
+      d[i+1] = Math.min(255, r * 0.349 + g * 0.686 + b * 0.168);
+      d[i+2] = Math.min(255, r * 0.272 + g * 0.534 + b * 0.131);
     }
-  } else if (fx === 'emboss') {
-    const src = new Uint8ClampedArray(d);
-    const kernel = [-2,-1,0,-1,1,1,0,1,2];
-    const W = canvasW;
-    for (let y=1;y<canvasH-1;y++) for (let x=1;x<W-1;x++) {
-      let r=0,g=0,b=0;
-      for (let ky=-1;ky<=1;ky++) for (let kx=-1;kx<=1;kx++) {
-        const i4=((y+ky)*W+(x+kx))*4;
-        const k=kernel[(ky+1)*3+(kx+1)];
-        r+=src[i4]*k; g+=src[i4+1]*k; b+=src[i4+2]*k;
-      }
-      const i4=(y*W+x)*4;
-      d[i4]=Math.min(255,Math.max(0,r+128));
-      d[i4+1]=Math.min(255,Math.max(0,g+128));
-      d[i4+2]=Math.min(255,Math.max(0,b+128));
-    }
-  } else if (fx === 'blur') {
+  } else if (fx === 'emboss' || fx === 'blur' || fx === 'sharpen') {
     const src = new Uint8ClampedArray(d);
     const W = canvasW;
-    const kernel = [1,2,1,2,4,2,1,2,1]; const ksum=16;
-    for (let y=1;y<canvasH-1;y++) for (let x=1;x<W-1;x++) {
-      let r=0,g=0,b=0;
-      for (let ky=-1;ky<=1;ky++) for (let kx=-1;kx<=1;kx++) {
-        const i4=((y+ky)*W+(x+kx))*4;
-        const k=kernel[(ky+1)*3+(kx+1)];
-        r+=src[i4]*k; g+=src[i4+1]*k; b+=src[i4+2]*k;
+    const kernels = {
+      emboss:  [-2, -1, 0, -1, 1, 1, 0, 1, 2],
+      blur:    [1, 2, 1, 2, 4, 2, 1, 2, 1],
+      sharpen: [0, -1, 0, -1, 5, -1, 0, -1, 0]
+    };
+    const ksums = { emboss: 1, blur: 16, sharpen: 1 };
+    const koffs = { emboss: 128, blur: 0, sharpen: 0 };
+    const kern = kernels[fx], ksum = ksums[fx], koff = koffs[fx];
+
+    for (let y = 1; y < canvasH - 1; y++) {
+      for (let x = 1; x < W - 1; x++) {
+        let r = 0, g = 0, b = 0;
+        for (let ky = -1; ky <= 1; ky++) {
+          for (let kx = -1; kx <= 1; kx++) {
+            const i4 = ((y + ky) * W + (x + kx)) * 4;
+            const k = kern[(ky + 1) * 3 + (kx + 1)];
+            r += src[i4] * k;
+            g += src[i4 + 1] * k;
+            b += src[i4 + 2] * k;
+          }
+        }
+        const i4 = (y * W + x) * 4;
+        d[i4]   = Math.min(255, Math.max(0, r / ksum + koff));
+        d[i4+1] = Math.min(255, Math.max(0, g / ksum + koff));
+        d[i4+2] = Math.min(255, Math.max(0, b / ksum + koff));
       }
-      const i4=(y*W+x)*4;
-      d[i4]=r/ksum; d[i4+1]=g/ksum; d[i4+2]=b/ksum;
-    }
-  } else if (fx === 'sharpen') {
-    const src = new Uint8ClampedArray(d);
-    const W = canvasW;
-    const kernel = [0,-1,0,-1,5,-1,0,-1,0];
-    for (let y=1;y<canvasH-1;y++) for (let x=1;x<W-1;x++) {
-      let r=0,g=0,b=0;
-      for (let ky=-1;ky<=1;ky++) for (let kx=-1;kx<=1;kx++) {
-        const i4=((y+ky)*W+(x+kx))*4;
-        const k=kernel[(ky+1)*3+(kx+1)];
-        r+=src[i4]*k; g+=src[i4+1]*k; b+=src[i4+2]*k;
-      }
-      const i4=(y*W+x)*4;
-      d[i4]=Math.min(255,Math.max(0,r));
-      d[i4+1]=Math.min(255,Math.max(0,g));
-      d[i4+2]=Math.min(255,Math.max(0,b));
     }
   }
 
   ctxDraw.putImageData(imgData, 0, 0);
-  showToast('Effect: ' + fx);
+  showToast('✨ Filter: ' + fx);
 }
 
 // ═══════════════════════════════════════════════════════════
-// AI FEATURES
+// AI STUDIO SUITE
 // ═══════════════════════════════════════════════════════════
-
-/** AI Auto-Shape Beautifier — detects drawn shape and redraws cleanly */
-function runAISnap() {
-  if (strokePoints.length < 3) { showToast('Draw something first!'); return; }
-  const xs = strokePoints.map(p=>p[0]);
-  const ys = strokePoints.map(p=>p[1]);
-  const minX=Math.min(...xs), maxX=Math.max(...xs);
-  const minY=Math.min(...ys), maxY=Math.max(...ys);
-  const w=maxX-minX, h=maxY-minY;
-  const cx=(minX+maxX)/2, cy=(minY+maxY)/2;
-
-  // Calculate circularity
-  const perimeter = strokePoints.reduce((acc,p,i,arr)=>{
-    if (i===0) return 0;
-    const dx=p[0]-arr[i-1][0], dy=p[1]-arr[i-1][1];
-    return acc+Math.sqrt(dx*dx+dy*dy);
-  }, 0);
-  const area = w*h;
-  const circularity = (4*Math.PI*area) / (perimeter*perimeter + 0.001);
-
-  // Aspect ratio
-  const ar = w / (h + 0.001);
-
-  // Detect start/end closeness (closed shape?)
-  const first=strokePoints[0], last=strokePoints[strokePoints.length-1];
-  const closenessDist = Math.sqrt((first[0]-last[0])**2+(first[1]-last[1])**2);
-  const isClosed = closenessDist < Math.max(w,h)*0.3;
-
-  let detected = 'freehand';
-  if (circularity > 0.5 && isClosed) detected = 'circle';
-  else if (isClosed && ar > 0.6 && ar < 1.7) detected = 'rectangle';
-  else if (isClosed && ar > 1.7) detected = 'rectangle';
-  else if (isClosed && ar < 0.6) detected = 'rectangle';
-  else if (!isClosed && strokePoints.length > 2) detected = 'line';
-
-  // Check triangle (3-corner shape)
-  if (isClosed && circularity < 0.3 && strokePoints.length > 5) {
-    detected = 'triangle';
+function runAIShapeSnap() {
+  if (strokePoints.length < 3) {
+    showToast('Draw a freehand shape first!');
+    return;
   }
+  const xs = strokePoints.map(p => p[0]);
+  const ys = strokePoints.map(p => p[1]);
+  const minX = Math.min(...xs), maxX = Math.max(...xs);
+  const minY = Math.min(...ys), maxY = Math.max(...ys);
+  const w = maxX - minX, h = maxY - minY;
+  const cx = (minX + maxX) / 2, cy = (minY + maxY) / 2;
+
+  const perimeter = strokePoints.reduce((acc, p, i, arr) => {
+    if (i === 0) return 0;
+    return acc + Math.hypot(p[0] - arr[i - 1][0], p[1] - arr[i - 1][1]);
+  }, 0);
+  const circularity = (4 * Math.PI * w * h) / (perimeter * perimeter + 0.001);
+
+  const first = strokePoints[0];
+  const last = strokePoints[strokePoints.length - 1];
+  const isClosed = Math.hypot(first[0] - last[0], first[1] - last[1]) < Math.max(w, h) * 0.35;
+
+  let detected = 'line';
+  if (isClosed && circularity > 0.48) detected = 'circle';
+  else if (isClosed && circularity < 0.28 && strokePoints.length > 5) detected = 'triangle';
+  else if (isClosed) detected = 'rectangle';
 
   pushUndo();
-  // Erase last stroke area
-  ctxDraw.clearRect(minX-5, minY-5, w+10, h+10);
-
-  const prevTool = CURRENT_TOOL;
+  ctxDraw.clearRect(minX - 6, minY - 6, w + 12, h + 12);
   ctxDraw.save();
-  ctxDraw.strokeStyle = getColor(1);
-  ctxDraw.lineWidth = BRUSH_SIZE;
-  ctxDraw.lineJoin = 'round';
+  ctxDraw.strokeStyle = getActiveColor(1);
+  ctxDraw.fillStyle   = COLOR2;
+  ctxDraw.lineWidth   = BRUSH_SIZE;
+  ctxDraw.lineJoin    = 'round';
   ctxDraw.beginPath();
 
-  switch(detected) {
+  switch (detected) {
     case 'circle':
-      ctxDraw.ellipse(cx, cy, w/2, h/2, 0, 0, Math.PI*2);
+      ctxDraw.ellipse(cx, cy, w / 2, h / 2, 0, 0, Math.PI * 2);
       break;
     case 'rectangle':
       ctxDraw.rect(minX, minY, w, h);
@@ -1222,177 +1395,195 @@ function runAISnap() {
       ctxDraw.moveTo(first[0], first[1]);
       ctxDraw.lineTo(last[0], last[1]);
       break;
-    default:
-      ctxDraw.moveTo(strokePoints[0][0], strokePoints[0][1]);
-      strokePoints.forEach(p => ctxDraw.lineTo(p[0], p[1]));
   }
-  ctxDraw.stroke();
+  renderFillStroke(ctxDraw);
   ctxDraw.restore();
-  showToast('🎯 AI Snap: ' + detected);
+
+  showToast('🎯 AI Shape Snapped: ' + detected);
 }
 
-/** AI Doodle Classifier */
-function runAIClassify() {
-  if (strokePoints.length < 3) { showToast('Draw a doodle first!'); return; }
-  const xs = strokePoints.map(p=>p[0]);
-  const ys = strokePoints.map(p=>p[1]);
-  const minX=Math.min(...xs), maxX=Math.max(...xs);
-  const minY=Math.min(...ys), maxY=Math.max(...ys);
-  const w=maxX-minX, h=maxY-minY;
-  const ar = w/(h+0.001);
+function runAIDoodleClassifier() {
+  if (strokePoints.length < 3) {
+    showToast('Draw a doodle first!');
+    return;
+  }
+  const xs = strokePoints.map(p => p[0]);
+  const ys = strokePoints.map(p => p[1]);
+  const w = Math.max(...xs) - Math.min(...xs);
+  const h = Math.max(...ys) - Math.min(...ys);
+  const ar = w / (h + 0.001);
 
-  const perimeter = strokePoints.reduce((acc,p,i,arr)=>{
-    if(i===0) return 0;
-    const dx=p[0]-arr[i-1][0], dy=p[1]-arr[i-1][1];
-    return acc+Math.sqrt(dx*dx+dy*dy);
+  const perimeter = strokePoints.reduce((acc, p, i, arr) => {
+    if (i === 0) return 0;
+    return acc + Math.hypot(p[0] - arr[i - 1][0], p[1] - arr[i - 1][1]);
   }, 0);
-  const area=w*h;
-  const circ=(4*Math.PI*area)/(perimeter*perimeter+0.001);
-  const first=strokePoints[0], last=strokePoints[strokePoints.length-1];
-  const closed=Math.sqrt((first[0]-last[0])**2+(first[1]-last[1])**2)<Math.max(w,h)*0.35;
+  const circularity = (4 * Math.PI * w * h) / (perimeter * perimeter + 0.001);
 
-  let classes = [];
-  if (circ > 0.6) classes.push({ label:'Circle / Moon 🌑', conf: circ });
-  if (ar > 1.5 && !closed) classes.push({ label:'Horizontal Line ➖', conf: 0.8 });
-  if (ar < 0.5 && !closed) classes.push({ label:'Vertical Line |', conf: 0.8 });
-  if (closed && circ < 0.3) classes.push({ label:'Triangle △', conf: 0.7 });
-  if (closed && circ > 0.3 && ar > 0.7 && ar < 1.4) classes.push({ label:'Rectangle / Square □', conf: 0.75 });
-  if (strokePoints.length > 50 && !closed) classes.push({ label:'Zigzag / Lightning ⚡', conf: 0.6 });
-  if (closed && strokePoints.length > 80) classes.push({ label:'Complex Shape / Doodle 🎨', conf: 0.5 });
-  if (classes.length === 0) classes.push({ label:'Unknown Shape ❓', conf: 0.4 });
+  const first = strokePoints[0];
+  const last = strokePoints[strokePoints.length - 1];
+  const closed = Math.hypot(first[0] - last[0], first[1] - last[1]) < Math.max(w, h) * 0.35;
 
-  classes.sort((a,b)=>b.conf-a.conf);
-  const best = classes[0];
-  const el = document.getElementById('ai-result');
-  document.getElementById('ai-result-text').textContent = `🤖 AI thinks: ${best.label} (${Math.round(best.conf*100)}%)`;
-  el.style.display = 'flex';
+  const candidates = [];
+  if (circularity > 0.55) candidates.push({ label: 'Circle / Clock / Moon 🌕', conf: circularity });
+  if (ar > 1.6 && !closed) candidates.push({ label: 'Horizontal Line / Horizon ➖', conf: 0.85 });
+  if (ar < 0.45 && !closed) candidates.push({ label: 'Tree Trunk / Tower 🗼', conf: 0.85 });
+  if (closed && circularity < 0.3) candidates.push({ label: 'Mountain / Triangle ⛰️', conf: 0.78 });
+  if (closed && circularity >= 0.3 && ar > 0.7 && ar < 1.4) candidates.push({ label: 'House / Box / Screen 📦', conf: 0.8 });
+  if (strokePoints.length > 50 && !closed) candidates.push({ label: 'Lightning / River ⚡', conf: 0.65 });
+  if (closed && strokePoints.length > 70) candidates.push({ label: 'Creative Artwork 🎨', conf: 0.6 });
+  if (candidates.length === 0) candidates.push({ label: 'Abstract Air Drawing ✨', conf: 0.5 });
+
+  candidates.sort((a, b) => b.conf - a.conf);
+  const best = candidates[0];
+
+  const resultCard = document.getElementById('ai-result');
+  document.getElementById('ai-result-text').textContent =
+    `🤖 AI Prediction: ${best.label} (${Math.round(best.conf * 100)}% match)`;
+  resultCard.style.display = 'flex';
   showToast('🔍 Classified: ' + best.label);
 }
 
-/** AI Coloring Book — convert drawing to black outlines on white */
-function runColoringBook() {
+function runAIColoringBook() {
   pushUndo();
-  const imgData = ctxDraw.getImageData(0,0,canvasW,canvasH);
+  const imgData = ctxDraw.getImageData(0, 0, canvasW, canvasH);
   const d = imgData.data;
   const src = new Uint8ClampedArray(d);
   const W = canvasW;
 
-  // Edge detection (Sobel approximation)
-  for (let y=1;y<canvasH-1;y++) for (let x=1;x<W-1;x++) {
-    const gx = (
-      -src[((y-1)*W+(x-1))*4] - 2*src[(y*W+(x-1))*4] - src[((y+1)*W+(x-1))*4]
-      +src[((y-1)*W+(x+1))*4] + 2*src[(y*W+(x+1))*4] + src[((y+1)*W+(x+1))*4]
-    );
-    const gy = (
-      -src[((y-1)*W+(x-1))*4] - 2*src[((y-1)*W+x)*4] - src[((y-1)*W+(x+1))*4]
-      +src[((y+1)*W+(x-1))*4] + 2*src[((y+1)*W+x)*4] + src[((y+1)*W+(x+1))*4]
-    );
-    const mag = Math.min(255, Math.sqrt(gx*gx+gy*gy));
-    const i4=(y*W+x)*4;
-    const edge = mag > 30 ? 0 : 255;
-    d[i4]=d[i4+1]=d[i4+2]=edge;
-    d[i4+3]=255;
+  for (let y = 1; y < canvasH - 1; y++) {
+    for (let x = 1; x < W - 1; x++) {
+      const gx = -src[((y - 1) * W + (x - 1)) * 4] - 2 * src[(y * W + (x - 1)) * 4] - src[((y + 1) * W + (x - 1)) * 4]
+                 + src[((y - 1) * W + (x + 1)) * 4] + 2 * src[(y * W + (x + 1)) * 4] + src[((y + 1) * W + (x + 1)) * 4];
+      const gy = -src[((y - 1) * W + (x - 1)) * 4] - 2 * src[((y - 1) * W + x) * 4] - src[((y - 1) * W + (x + 1)) * 4]
+                 + src[((y + 1) * W + (x - 1)) * 4] + 2 * src[((y + 1) * W + x) * 4] + src[((y + 1) * W + (x + 1)) * 4];
+      const mag = Math.hypot(gx, gy);
+      const i4 = (y * W + x) * 4;
+      const isEdge = mag > 35;
+      d[i4]     = isEdge ? 0 : 255;
+      d[i4 + 1] = isEdge ? 0 : 255;
+      d[i4 + 2] = isEdge ? 0 : 255;
+      d[i4 + 3] = isEdge ? 255 : 0; // transparent white, opaque black lines
+    }
   }
-  ctxDraw.putImageData(imgData,0,0);
-  BACKGROUND='white'; renderBackground();
-  showToast('📖 Coloring Book mode applied!');
+  ctxDraw.putImageData(imgData, 0, 0);
+  BACKGROUND = 'white';
+  renderBackground();
+  showToast('📖 Coloring Book Mode Generated!');
 }
 
-/** AI Inpainting — fill selected area with surrounding color average */
-function runInpaint() {
-  if (lassoPoints.length < 3) { showToast('Use Lasso tool to select area first'); return; }
+function runAIInpaint() {
+  if (lassoPoints.length < 3) {
+    showToast('Select an area with Lasso or Freehand first!');
+    return;
+  }
   pushUndo();
-  showToast('🪄 Inpainting... (smooth fill applied)');
-  // Simple: gather edge pixels of lasso, average color, fill region
-  const imgData = ctxDraw.getImageData(0,0,canvasW,canvasH);
+  const imgData = ctxDraw.getImageData(0, 0, canvasW, canvasH);
   const d = imgData.data;
-  let rSum=0,gSum=0,bSum=0,cnt=0;
-  lassoPoints.forEach(p=>{
-    const i4=(Math.round(p[1])*canvasW+Math.round(p[0]))*4;
-    rSum+=d[i4]; gSum+=d[i4+1]; bSum+=d[i4+2]; cnt++;
+  let rSum = 0, gSum = 0, bSum = 0, count = 0;
+
+  lassoPoints.forEach(p => {
+    const x = Math.max(0, Math.min(canvasW - 1, Math.round(p[0])));
+    const y = Math.max(0, Math.min(canvasH - 1, Math.round(p[1])));
+    const i4 = (y * canvasW + x) * 4;
+    rSum += d[i4];
+    gSum += d[i4 + 1];
+    bSum += d[i4 + 2];
+    count++;
   });
-  const ar=Math.round(rSum/cnt), ag=Math.round(gSum/cnt), ab=Math.round(bSum/cnt);
 
-  // Fill bounding box of lasso with average color
-  const xs=lassoPoints.map(p=>p[0]), ys=lassoPoints.map(p=>p[1]);
-  const minX=Math.max(0,Math.round(Math.min(...xs)));
-  const minY=Math.max(0,Math.round(Math.min(...ys)));
-  const maxX=Math.min(canvasW-1,Math.round(Math.max(...xs)));
-  const maxY=Math.min(canvasH-1,Math.round(Math.max(...ys)));
+  const avgR = Math.round(rSum / count);
+  const avgG = Math.round(gSum / count);
+  const avgB = Math.round(bSum / count);
 
-  for (let y=minY;y<=maxY;y++) for (let x=minX;x<=maxX;x++) {
-    const i4=(y*canvasW+x)*4;
-    // noise blend
-    d[i4]=Math.min(255,ar+Math.round((Math.random()-0.5)*20));
-    d[i4+1]=Math.min(255,ag+Math.round((Math.random()-0.5)*20));
-    d[i4+2]=Math.min(255,ab+Math.round((Math.random()-0.5)*20));
-    d[i4+3]=255;
+  const xs = lassoPoints.map(p => p[0]);
+  const ys = lassoPoints.map(p => p[1]);
+  const minX = Math.max(0, Math.round(Math.min(...xs)));
+  const minY = Math.max(0, Math.round(Math.min(...ys)));
+  const maxX = Math.min(canvasW - 1, Math.round(Math.max(...xs)));
+  const maxY = Math.min(canvasH - 1, Math.round(Math.max(...ys)));
+
+  for (let y = minY; y <= maxY; y++) {
+    for (let x = minX; x <= maxX; x++) {
+      const i4 = (y * canvasW + x) * 4;
+      const noise = (Math.random() - 0.5) * 16;
+      d[i4]     = Math.min(255, Math.max(0, avgR + noise));
+      d[i4 + 1] = Math.min(255, Math.max(0, avgG + noise));
+      d[i4 + 2] = Math.min(255, Math.max(0, avgB + noise));
+      d[i4 + 3] = 255;
+    }
   }
-  ctxDraw.putImageData(imgData,0,0);
+
+  ctxDraw.putImageData(imgData, 0, 0);
+  showToast('🪄 Inpainting complete');
 }
 
-/** AI Style Transfer — applies artistic convolution filters */
-function runStyleTransfer() {
+function runAIStyleTransfer() {
   pushUndo();
-  showToast('🖼️ Applying style filter...');
-  // Apply a stylized look: posterize + warm color shift
-  const imgData = ctxDraw.getImageData(0,0,canvasW,canvasH);
+  const imgData = ctxDraw.getImageData(0, 0, canvasW, canvasH);
   const d = imgData.data;
   const levels = 4;
-  for (let i=0;i<d.length;i+=4) {
-    d[i]  = Math.round(d[i]/(256/levels))*(256/levels);
-    d[i+1]= Math.round(d[i+1]/(256/levels))*(256/levels);
-    d[i+2]= Math.round(d[i+2]/(256/levels))*(256/levels);
-    // Warm tint
-    d[i] = Math.min(255, d[i]+15);
-    d[i+2]= Math.max(0, d[i+2]-10);
+  const step = 256 / levels;
+
+  for (let i = 0; i < d.length; i += 4) {
+    d[i]     = Math.round(d[i] / step) * step;
+    d[i + 1] = Math.round(d[i + 1] / step) * step;
+    d[i + 2] = Math.round(d[i + 2] / step) * step;
+    // Cyberpunk warm-shift
+    d[i]     = Math.min(255, d[i] + 20);
+    d[i + 2] = Math.max(0, d[i + 2] - 15);
   }
-  ctxDraw.putImageData(imgData,0,0);
-  showToast('🖼️ Style transfer complete!');
+  ctxDraw.putImageData(imgData, 0, 0);
+  showToast('🖼️ Style Transfer complete!');
 }
 
 // ═══════════════════════════════════════════════════════════
-// UNDO / REDO
+// UNDO, REDO, CLEAR & EXPORT
 // ═══════════════════════════════════════════════════════════
 function pushUndo() {
+  if (!canvasDraw) return;
   if (undoStack.length >= UNDO_MAX) undoStack.shift();
   undoStack.push(canvasDraw.toDataURL());
   redoStack = [];
 }
 
 function undo() {
-  if (undoStack.length === 0) { showToast('Nothing to undo'); return; }
+  if (undoStack.length === 0) {
+    showToast('Nothing to undo');
+    return;
+  }
   redoStack.push(canvasDraw.toDataURL());
+  const prevSnapshot = undoStack.pop();
   const img = new Image();
-  img.src = undoStack.pop();
+  img.src = prevSnapshot;
   img.onload = () => {
-    ctxDraw.clearRect(0,0,canvasW,canvasH);
-    ctxDraw.drawImage(img,0,0);
+    ctxDraw.clearRect(0, 0, canvasW, canvasH);
+    ctxDraw.drawImage(img, 0, 0);
   };
   showToast('↩️ Undo');
 }
 
 function redo() {
-  if (redoStack.length === 0) { showToast('Nothing to redo'); return; }
+  if (redoStack.length === 0) {
+    showToast('Nothing to redo');
+    return;
+  }
   undoStack.push(canvasDraw.toDataURL());
+  const nextSnapshot = redoStack.pop();
   const img = new Image();
-  img.src = redoStack.pop();
+  img.src = nextSnapshot;
   img.onload = () => {
-    ctxDraw.clearRect(0,0,canvasW,canvasH);
-    ctxDraw.drawImage(img,0,0);
+    ctxDraw.clearRect(0, 0, canvasW, canvasH);
+    ctxDraw.drawImage(img, 0, 0);
   };
   showToast('↪️ Redo');
 }
 
 function clearCanvas() {
   pushUndo();
-  ctxDraw.clearRect(0,0,canvasW,canvasH);
+  ctxDraw.clearRect(0, 0, canvasW, canvasH);
   showToast('🗑️ Canvas cleared');
 }
 
-// ═══════════════════════════════════════════════════════════
-// SAVE
-// ═══════════════════════════════════════════════════════════
 function saveImage() {
   const merged = document.createElement('canvas');
   merged.width = canvasW;
@@ -1402,63 +1593,109 @@ function saveImage() {
   mc.drawImage(canvasDraw, 0, 0);
 
   merged.toBlob(blob => {
+    if (!blob) return;
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
     a.download = `ai-air-draw-${Date.now()}.png`;
+    document.body.appendChild(a);
     a.click();
+    document.body.removeChild(a);
     URL.revokeObjectURL(url);
-    showToast('💾 Saved!');
+    showToast('💾 Saved PNG artwork!');
   }, 'image/png');
 }
 
 // ═══════════════════════════════════════════════════════════
-// CAMERA & HAND TRACKING
+// MEDIAPIPE HAND TRACKING & WEBCAM PIPELINE
 // ═══════════════════════════════════════════════════════════
-async function startCamera() {
-  setTrackerStatus('Starting camera...', '📷');
+async function startHandTracking() {
+  setTrackerStatus('Initializing camera & MediaPipe AI...', '⏳');
+
   try {
-    const stream = await navigator.mediaDevices.getUserMedia({
-      video: { width: { ideal: 1280 }, height: { ideal: 720 }, facingMode: 'user' }
-    });
-    const video = document.getElementById('webcam');
-    video.srcObject = stream;
-    video.style.display = 'block';
+    if (typeof Hands === 'undefined') {
+      throw new Error('MediaPipe Hands library not loaded from CDN.');
+    }
+
+    // 1. Initialize MediaPipe Hands solution
+    if (!handsInstance) {
+      handsInstance = new Hands({
+        locateFile: file => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`
+      });
+
+      handsInstance.setOptions({
+        maxNumHands: 2,
+        modelComplexity: 1,
+        minDetectionConfidence: 0.5,
+        minTrackingConfidence: 0.5
+      });
+
+      handsInstance.onResults(onHandResults);
+      await handsInstance.initialize();
+    }
+
+    // 2. Start webcam stream using MediaPipe CameraUtils
+    const videoElement = document.getElementById('webcam');
+    if (!cameraInstance) {
+      cameraInstance = new Camera(videoElement, {
+        onFrame: async () => {
+          if (cameraActive && handsInstance) {
+            try {
+              await handsInstance.send({ image: videoElement });
+            } catch (err) {
+              console.warn('Frame send warning:', err);
+            }
+          }
+        },
+        width: 1280,
+        height: 720
+      });
+    }
+
+    await cameraInstance.start();
+
+    videoElement.style.display = 'block';
     cameraActive = true;
+    handMode = true;
+
     document.getElementById('btn-cam-toggle').textContent = '📷 Camera ON';
-    setTrackerStatus('Camera ready, loading AI...', '🤖');
-    await initHandLandmarker();
-    requestAnimationFrame(trackLoop);
-  } catch(err) {
-    console.error('Camera error:', err);
-    setTrackerStatus('Camera error: ' + err.message, '❌');
-    showToast('⚠️ Camera failed — switching to mouse mode');
-    handMode = false;
-    document.getElementById('btn-mouse-mode').classList.add('active');
-    document.getElementById('btn-hand-mode').classList.remove('active');
+    document.getElementById('btn-hand-mode').classList.add('active');
+    document.getElementById('btn-mouse-mode').classList.remove('active');
+
+    setTrackerStatus('Hand tracking active ✋ (Show your hand)', '✅');
+    showToast('✋ Touchless Hand Tracking Active! Pinch to Draw.');
+
+    const retryBtn = document.getElementById('btn-retry-ai');
+    if (retryBtn) retryBtn.remove();
+
+  } catch (err) {
+    console.error('Camera/AI start failure:', err);
+    const isPermDenied = err.name === 'NotAllowedError';
+    const errorText = isPermDenied
+      ? 'Camera permission denied'
+      : (err.message || 'AI initialization error');
+
+    setTrackerStatus(errorText + ' — Mouse mode active', '⚠️');
+    showToast('⚠️ ' + errorText);
+
+    // Provide immediate Retry AI button
+    const statusBar = document.getElementById('tracker-status');
+    if (statusBar && !document.getElementById('btn-retry-ai')) {
+      const btn = document.createElement('button');
+      btn.id = 'btn-retry-ai';
+      btn.textContent = '🔄 Retry Camera';
+      btn.style.cssText = 'margin-left:8px;padding:3px 8px;border-radius:6px;border:1px solid rgba(0,212,255,0.4);background:rgba(0,212,255,0.2);color:white;cursor:pointer;font-size:0.75rem;';
+      statusBar.appendChild(btn);
+    }
+
+    fallbackToMouseMode();
   }
 }
 
-async function initHandLandmarker() {
-  try {
-    const vision = await window.FilesetResolver.forVisionTasks(
-      'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/wasm'
-    );
-    handLandmarker = await window.HandLandmarker.createFromOptions(vision, {
-      baseOptions: {
-        modelAssetPath: 'https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task',
-        delegate: 'GPU'
-      },
-      runningMode: 'VIDEO',
-      numHands: 2
-    });
-    setTrackerStatus('Hand tracking ready ✋', '✅');
-    showToast('✋ Hand tracking active! Pinch to draw.');
-  } catch(err) {
-    console.error('MediaPipe init error:', err);
-    setTrackerStatus('AI init failed — mouse mode', '⚠️');
-    handMode = false;
-  }
+function fallbackToMouseMode() {
+  handMode = false;
+  document.getElementById('btn-mouse-mode').classList.add('active');
+  document.getElementById('btn-hand-mode').classList.remove('active');
 }
 
 function toggleCamera() {
@@ -1471,294 +1708,362 @@ function toggleCamera() {
     video.style.display = 'none';
     cameraActive = false;
     handMode = false;
+    if (pinchWasDown) {
+      onPointerUp();
+      pinchWasDown = false;
+    }
+    ctxOverlay.clearRect(0, 0, canvasW, canvasH);
+    hideVirtualCursor();
     document.getElementById('btn-cam-toggle').textContent = '📷 Camera OFF';
-    setTrackerStatus('Camera off', '📷');
+    setTrackerStatus('Camera switched off — Mouse mode', '🖱️');
+    fallbackToMouseMode();
   } else {
-    handMode = true;
-    startCamera();
+    startHandTracking();
   }
 }
 
 // ═══════════════════════════════════════════════════════════
-// HAND TRACKING LOOP
+// HAND LANDMARK & GESTURE PROCESSING
 // ═══════════════════════════════════════════════════════════
-function trackLoop() {
+function onHandResults(results) {
   if (!cameraActive) return;
-  requestAnimationFrame(trackLoop);
 
-  const video = document.getElementById('webcam');
-  if (!handLandmarker || video.readyState < 2) return;
+  ctxOverlay.clearRect(0, 0, canvasW, canvasH);
 
-  const now = performance.now();
-  if (video.currentTime === lastVideoTime) return;
-  lastVideoTime = video.currentTime;
-
-  let results;
-  try {
-    results = handLandmarker.detectForVideo(video, now);
-  } catch(e) { return; }
-
-  ctxOverlay.clearRect(0,0,canvasW,canvasH);
-
-  if (!results.landmarks || results.landmarks.length === 0) {
-    pinchWasDown = false;
-    setTrackerStatus('No hand detected', '👁️');
+  if (!results.multiHandLandmarks || results.multiHandLandmarks.length === 0) {
+    if (pinchWasDown) {
+      onPointerUp();
+      pinchWasDown = false;
+    }
+    hideVirtualCursor();
+    setTrackerStatus('No hand detected 👁️', '👁️');
     return;
   }
 
-  const lm = results.landmarks[0];
-  processHandGesture(lm);
+  // Primary drawing hand (first detected hand)
+  const primaryLandmarks = results.multiHandLandmarks[0];
+  drawSkeletonOverlay(ctxOverlay, primaryLandmarks);
 
-  // Draw skeleton
-  drawHandSkeleton(ctxOverlay, lm);
+  // Secondary hand (if present) activates Holographic AR Color Palette
+  if (results.multiHandLandmarks.length > 1) {
+    const secondaryLandmarks = results.multiHandLandmarks[1];
+    drawSkeletonOverlay(ctxOverlay, secondaryLandmarks);
+    drawHolographicPalette(ctxOverlay, secondaryLandmarks);
+  }
 
-  // Second hand = holographic palette
-  if (results.landmarks.length > 1) {
-    drawHoloPalette(ctxOverlay, results.landmarks[1]);
+  if (handMode) {
+    processHandGestures(primaryLandmarks);
   }
 }
 
-function lmToCanvas(lm, idx) {
-  // Mirror X (front camera mirroring)
+function landmarkToCanvas(lm) {
+  // Mirror X so user movements match front selfie camera naturally
   return {
-    x: (1 - lm[idx].x) * canvasW,
-    y: lm[idx].y * canvasH,
-    z: lm[idx].z
+    x: (1 - lm.x) * canvasW,
+    y: lm.y * canvasH,
+    z: lm.z
   };
 }
 
-function processHandGesture(lm) {
-  const tip4 = lmToCanvas(lm, 4);   // thumb tip
-  const tip8 = lmToCanvas(lm, 8);   // index tip
-  const tip12 = lmToCanvas(lm, 12); // middle tip
-  const tip16 = lmToCanvas(lm, 16); // ring tip
-  const tip20 = lmToCanvas(lm, 20); // pinky tip
-  const pip8 = lmToCanvas(lm, 6);   // index pip
-  const pip12 = lmToCanvas(lm, 10);
-  const pip16 = lmToCanvas(lm, 14);
-  const pip20 = lmToCanvas(lm, 18);
-  const mcp4 = lmToCanvas(lm, 2);   // thumb mcp
+function processHandGestures(lm) {
+  const tip4  = landmarkToCanvas(lm[4]);   // Thumb Tip
+  const tip8  = landmarkToCanvas(lm[8]);   // Index Finger Tip
+  const tip12 = landmarkToCanvas(lm[12]);  // Middle Finger Tip
+  const tip16 = landmarkToCanvas(lm[16]);  // Ring Finger Tip
+  const tip20 = landmarkToCanvas(lm[20]);  // Pinky Finger Tip
 
-  // Finger up states
-  const idx_up = tip8.y < pip8.y;
-  const mid_up = tip12.y < pip12.y;
-  const ring_up = tip16.y < pip16.y;
-  const pinky_up = tip20.y < pip20.y;
-  const thumb_up = tip4.y < mcp4.y - 20;
+  const pip8  = landmarkToCanvas(lm[6]);   // Index PIP
+  const pip12 = landmarkToCanvas(lm[10]);  // Middle PIP
+  const pip16 = landmarkToCanvas(lm[14]);  // Ring PIP
+  const pip20 = landmarkToCanvas(lm[18]);  // Pinky PIP
+  const mcp4  = landmarkToCanvas(lm[2]);   // Thumb MCP
 
-  // Pinch distance (normalized)
-  const pinchDist = Math.sqrt(
-    (lm[4].x - lm[8].x)**2 + (lm[4].y - lm[8].y)**2
-  );
+  // Finger extended states (higher up on screen has smaller Y)
+  const indexUp  = tip8.y  < pip8.y;
+  const middleUp = tip12.y < pip12.y;
+  const ringUp   = tip16.y < pip16.y;
+  const pinkyUp  = tip20.y < pip20.y;
+  const thumbUp  = tip4.y  < mcp4.y - 15;
 
-  const cursorX = (tip8.x + tip4.x) / 2;
-  const cursorY = (tip8.y + tip4.y) / 2;
+  // Raw pinch distance in normalized space
+  const pinchDist = Math.hypot(lm[4].x - lm[8].x, lm[4].y - lm[8].y);
 
-  // Gesture detection
+  // Position cursor halfway between thumb and index tip
+  const rawCursorX = (tip8.x + tip4.x) / 2;
+  const rawCursorY = (tip8.y + tip4.y) / 2;
+
+  // Exponential Moving Average filter to eliminate hand tremors
+  smoothCursorX = SMOOTH_ALPHA * rawCursorX + (1 - SMOOTH_ALPHA) * smoothCursorX;
+  smoothCursorY = SMOOTH_ALPHA * rawCursorY + (1 - SMOOTH_ALPHA) * smoothCursorY;
+
+  updateVirtualCursor(smoothCursorX, smoothCursorY);
+
+  // Gesture classification with hysteresis
   let gesture = 'hover';
-  if (idx_up && mid_up && !ring_up && !pinky_up) gesture = 'peace';    // ✌️ → eraser
-  else if (!idx_up && !mid_up && !ring_up && !pinky_up && thumb_up) gesture = 'thumbsup'; // 👍 → save
-  else if (ring_up && !idx_up && !mid_up) gesture = 'ring';           // ring up → fill
-  else if (pinchDist < PINCH_THRESH) gesture = 'pinch';               // pinch → draw
 
-  drawCursorDot(cursorX, cursorY);
+  if (indexUp && middleUp && !ringUp && !pinkyUp) {
+    gesture = 'peace';           // ✌️ Peace sign -> Eraser
+  } else if (!indexUp && !middleUp && !ringUp && !pinkyUp && thumbUp) {
+    gesture = 'thumbsup';        // 👍 Thumbs Up -> Save PNG
+  } else if (ringUp && !indexUp && !middleUp) {
+    gesture = 'ring';            // 🤙 Ring finger -> Flood fill
+  } else if (pinchDist < (pinchWasDown ? PINCH_RELEASE : PINCH_THRESH)) {
+    gesture = 'pinch';           // 🤏 Pinch -> Draw / Ink
+  }
 
-  // Apply gesture action
-  switch(gesture) {
-    case 'pinch': {
-      setTrackerStatus('Drawing ✏️', '🤏');
-      // 3D pressure from Z
-      const pressure = Math.max(0.3, Math.min(2.0, 1 + tip8.z * -5));
-      const effectiveSize = Math.round(BRUSH_SIZE * pressure);
-      if (!pinchWasDown) {
-        onPointerDown(cursorX, cursorY, 0);
-        pinchWasDown = true;
-      } else {
-        onPointerMove(cursorX, cursorY);
-      }
-      break;
+  // Execute gesture behavior
+  if (gesture === 'pinch') {
+    setTrackerStatus('Drawing ✏️', '🤏');
+    hideDwellRing();
+    if (!pinchWasDown) {
+      onPointerDown(smoothCursorX, smoothCursorY);
+      pinchWasDown = true;
+    } else {
+      onPointerMove(smoothCursorX, smoothCursorY);
     }
-    case 'peace':
-      if (pinchWasDown) { onPointerUp(); pinchWasDown = false; }
-      const prevTool2 = CURRENT_TOOL;
+  } else {
+    if (pinchWasDown) {
+      onPointerUp();
+      pinchWasDown = false;
+    }
+
+    const now = Date.now();
+    if (gesture === 'peace') {
       selectTool('eraser');
-      setTrackerStatus('Eraser ✌️', '✌️');
-      break;
-    case 'thumbsup':
-      if (pinchWasDown) { onPointerUp(); pinchWasDown = false; }
-      saveImage();
-      setTrackerStatus('Saved! 👍', '💾');
-      break;
-    case 'ring':
-      if (pinchWasDown) { onPointerUp(); pinchWasDown = false; }
-      floodFill(cursorX, cursorY);
-      setTrackerStatus('Fill 🪣', '🪣');
-      break;
-    case 'hover': {
-      if (pinchWasDown) { onPointerUp(); pinchWasDown = false; }
-      setTrackerStatus('Hovering 🖐', '🖐');
-      // Dwell on UI buttons
-      checkDwell(cursorX, cursorY);
-      break;
+      setTrackerStatus('Eraser Tool Active ✌️', '✌️');
+      hideDwellRing();
+    } else if (gesture === 'thumbsup') {
+      if (prevGesture !== 'thumbsup' && (now - gestureDebounceTimer) > 1200) {
+        saveImage();
+        gestureDebounceTimer = now;
+      }
+      setTrackerStatus('Artwork Saved! 👍', '💾');
+      hideDwellRing();
+    } else if (gesture === 'ring') {
+      if (prevGesture !== 'ring' && (now - gestureDebounceTimer) > 800) {
+        floodFill(smoothCursorX, smoothCursorY);
+        gestureDebounceTimer = now;
+      }
+      setTrackerStatus('Bucket Fill 🪣', '🪣');
+      hideDwellRing();
+    } else {
+      setTrackerStatus('Hovering (Move Hand) 🖐', '🖐');
+      checkDwellClick(smoothCursorX, smoothCursorY);
     }
   }
+
+  prevGesture = gesture;
 }
 
-function drawHandSkeleton(ctx, lm) {
-  const connections = [
-    [0,1],[1,2],[2,3],[3,4],
-    [0,5],[5,6],[6,7],[7,8],
-    [0,9],[9,10],[10,11],[11,12],
-    [0,13],[13,14],[14,15],[15,16],
-    [0,17],[17,18],[18,19],[19,20],
-    [5,9],[9,13],[13,17]
-  ];
+// ═══════════════════════════════════════════════════════════
+// SKELETON & HOLOGRAPHIC COLOR PALETTE OVERLAYS
+// ═══════════════════════════════════════════════════════════
+const SKELETON_CONNECTIONS = [
+  [0, 1], [1, 2], [2, 3], [3, 4],
+  [0, 5], [5, 6], [6, 7], [7, 8],
+  [0, 9], [9, 10], [10, 11], [11, 12],
+  [0, 13], [13, 14], [14, 15], [15, 16],
+  [0, 17], [17, 18], [18, 19], [19, 20],
+  [5, 9], [9, 13], [13, 17]
+];
 
-  ctx.strokeStyle = 'rgba(0,212,255,0.6)';
-  ctx.lineWidth = 2;
-  connections.forEach(([a,b]) => {
-    const pa = lmToCanvas(lm,a), pb = lmToCanvas(lm,b);
-    ctx.beginPath(); ctx.moveTo(pa.x,pa.y); ctx.lineTo(pb.x,pb.y); ctx.stroke();
-  });
+function drawSkeletonOverlay(ctx, landmarks) {
+  ctx.save();
+  ctx.strokeStyle = 'rgba(0, 212, 255, 0.65)';
+  ctx.lineWidth   = 2.2;
+  ctx.lineCap     = 'round';
 
-  // Joints
-  ctx.fillStyle = 'rgba(0,212,255,0.9)';
-  lm.forEach((_,i) => {
-    const p = lmToCanvas(lm,i);
-    ctx.beginPath(); ctx.arc(p.x,p.y,3,0,Math.PI*2); ctx.fill();
-  });
-}
-
-function drawHoloPalette(ctx, lm) {
-  const palm = lmToCanvas(lm, 0);
-  const r = 70;
-  PALETTE.slice(0,8).forEach((hex,i) => {
-    const ang = (i/8)*Math.PI*2 - Math.PI/2;
-    const px = palm.x + r*Math.cos(ang);
-    const py = palm.y + r*Math.sin(ang);
+  SKELETON_CONNECTIONS.forEach(([i, j]) => {
+    const p1 = landmarkToCanvas(landmarks[i]);
+    const p2 = landmarkToCanvas(landmarks[j]);
     ctx.beginPath();
-    ctx.arc(px, py, 14, 0, Math.PI*2);
-    ctx.fillStyle = hex;
-    ctx.fill();
-    ctx.strokeStyle = 'white';
-    ctx.lineWidth = 2;
+    ctx.moveTo(p1.x, p1.y);
+    ctx.lineTo(p2.x, p2.y);
     ctx.stroke();
   });
+
+  ctx.fillStyle = 'rgba(0, 212, 255, 0.95)';
+  landmarks.forEach(lm => {
+    const p = landmarkToCanvas(lm);
+    ctx.beginPath();
+    ctx.arc(p.x, p.y, 3.5, 0, Math.PI * 2);
+    ctx.fill();
+  });
+
+  ctx.restore();
 }
 
-// Dwell-click for hand tracking UI interaction
-function checkDwell(cursorX, cursorY) {
-  // Check if cursor is over the toolbar area
-  const row1 = document.getElementById('toolbar-row1');
-  const row2 = document.getElementById('toolbar-row2');
-  const rect1 = row1.getBoundingClientRect();
-  const rect2 = row2.getBoundingClientRect();
+function drawHolographicPalette(ctx, landmarks) {
+  const palm = landmarkToCanvas(landmarks[0]);
+  const paletteRadius = 75;
+  ctx.save();
 
-  if (cursorY < rect1.bottom + rect2.height) {
-    // Over toolbar — find closest button
-    const buttons = document.querySelectorAll('.tb-btn, .tab-btn');
-    let best = null, bestDist = 60;
-    buttons.forEach(btn => {
-      const r = btn.getBoundingClientRect();
-      const bx = r.left + r.width/2;
-      const by = r.top + r.height/2;
-      const dist = Math.sqrt((cursorX-bx)**2+(cursorY-by)**2);
-      if (dist < bestDist) { bestDist=dist; best=btn; }
-    });
+  const paletteColors = PALETTE.slice(0, 8);
+  paletteColors.forEach((hex, i) => {
+    const ang = (i / paletteColors.length) * Math.PI * 2 - Math.PI / 2;
+    const px = palm.x + paletteRadius * Math.cos(ang);
+    const py = palm.y + paletteRadius * Math.sin(ang);
 
-    if (best) {
-      if (dwellTarget !== best) {
-        dwellTarget = best;
-        dwellStart = performance.now();
-        showDwellRing(cursorX, cursorY);
-      } else {
-        const elapsed = performance.now() - dwellStart;
-        const progress = Math.min(elapsed / DWELL_MS, 1);
-        updateDwellRing(cursorX, cursorY, progress);
-        if (progress >= 1) {
-          best.click();
-          dwellTarget = null;
-          hideDwellRing();
-          showToast('👆 Dwell activated: ' + (best.title || best.textContent));
-        }
-      }
-      return;
+    ctx.beginPath();
+    ctx.arc(px, py, 14, 0, Math.PI * 2);
+    ctx.fillStyle = hex;
+    ctx.fill();
+    ctx.strokeStyle = '#FFFFFF';
+    ctx.lineWidth = 2.5;
+    ctx.stroke();
+
+    // Check if primary hand cursor intersects this swatch
+    if (Math.hypot(smoothCursorX - px, smoothCursorY - py) < 18) {
+      setColor1(hex);
+      showToast('🎨 Palette selected: ' + hex);
     }
+  });
+
+  ctx.restore();
+}
+
+// ═══════════════════════════════════════════════════════════
+// DWELL-CLICK INTERACTION (Touchless UI Control)
+// ═══════════════════════════════════════════════════════════
+function checkDwellClick(cursorX, cursorY) {
+  const clickableButtons = document.querySelectorAll('.tb-btn, .tab-btn, .ai-btn, .color-disc');
+  let closestBtn = null;
+  let minDistance = 45;
+
+  clickableButtons.forEach(btn => {
+    const rect = btn.getBoundingClientRect();
+    const bx = rect.left + rect.width / 2;
+    const by = rect.top + rect.height / 2;
+    const dist = Math.hypot(cursorX - bx, cursorY - by);
+    if (dist < minDistance) {
+      minDistance = dist;
+      closestBtn = btn;
+    }
+  });
+
+  if (closestBtn) {
+    if (dwellTarget !== closestBtn) {
+      dwellTarget = closestBtn;
+      dwellStart  = performance.now();
+      showDwellRing(cursorX, cursorY);
+    } else {
+      const elapsed  = performance.now() - dwellStart;
+      const progress = Math.min(elapsed / DWELL_MS, 1);
+      updateDwellRing(cursorX, cursorY, progress);
+      if (progress >= 1) {
+        closestBtn.click();
+        dwellTarget = null;
+        hideDwellRing();
+        showToast('👆 Selected: ' + (closestBtn.title || closestBtn.textContent.trim()));
+      }
+    }
+  } else {
+    dwellTarget = null;
+    hideDwellRing();
   }
-  dwellTarget = null;
-  hideDwellRing();
 }
 
 function showDwellRing(x, y) {
   const svg = document.getElementById('dwell-svg');
-  svg.style.display = 'block';
-  svg.style.left = (x-30)+'px';
-  svg.style.top = (y-30)+'px';
+  if (svg) {
+    svg.style.display = 'block';
+    svg.style.left = (x - 30) + 'px';
+    svg.style.top  = (y - 30) + 'px';
+  }
 }
-
 function updateDwellRing(x, y, progress) {
   const svg = document.getElementById('dwell-svg');
-  svg.style.left = (x-30)+'px';
-  svg.style.top = (y-30)+'px';
   const arc = document.getElementById('dwell-arc');
-  const circumference = 163.4;
-  arc.style.strokeDashoffset = circumference * (1-progress);
+  if (svg && arc) {
+    svg.style.left = (x - 30) + 'px';
+    svg.style.top  = (y - 30) + 'px';
+    arc.style.strokeDashoffset = 163.4 * (1 - progress);
+  }
 }
-
 function hideDwellRing() {
-  document.getElementById('dwell-svg').style.display = 'none';
+  const svg = document.getElementById('dwell-svg');
+  if (svg) svg.style.display = 'none';
 }
 
-function drawCursorDot(x, y) {
+function updateVirtualCursor(x, y) {
   const dot = document.getElementById('cursor-dot');
-  dot.style.left = x+'px';
-  dot.style.top = y+'px';
-  dot.style.display = 'block';
+  if (dot) {
+    dot.style.display = 'block';
+    dot.style.left = x + 'px';
+    dot.style.top  = y + 'px';
+  }
+}
+
+function hideVirtualCursor() {
+  const dot = document.getElementById('cursor-dot');
+  if (dot) dot.style.display = 'none';
 }
 
 // ═══════════════════════════════════════════════════════════
 // KEYBOARD SHORTCUTS
 // ═══════════════════════════════════════════════════════════
-function bindKeyboard() {
+function bindKeyboardShortcuts() {
   document.addEventListener('keydown', e => {
-    if (e.target.tagName === 'INPUT') return;
+    if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA' || e.target.tagName === 'SELECT') {
+      return;
+    }
+
     if (e.ctrlKey || e.metaKey) {
-      switch(e.key.toLowerCase()) {
+      switch (e.key.toLowerCase()) {
         case 'z': e.preventDefault(); undo(); break;
         case 'y': e.preventDefault(); redo(); break;
         case 's': e.preventDefault(); saveImage(); break;
       }
       return;
     }
-    switch(e.key.toLowerCase()) {
+
+    switch (e.key.toLowerCase()) {
       case 'p': selectTool('pen'); break;
       case 'e': selectTool('eraser'); break;
       case 'f': selectTool('fill'); break;
       case 'i': selectTool('eyedropper'); break;
       case 't': selectTool('text'); break;
-      case 's': selectTool('select-rect'); break;
       case 'l': selectTool('lasso'); break;
       case 'm': selectTool('magnifier'); break;
-      case 'c': if (e.shiftKey) clearCanvas(); break;
-      case '[': BRUSH_SIZE=Math.max(1,BRUSH_SIZE-2); document.getElementById('size-slider').value=BRUSH_SIZE; document.getElementById('size-val').textContent=BRUSH_SIZE; break;
-      case ']': BRUSH_SIZE=Math.min(80,BRUSH_SIZE+2); document.getElementById('size-slider').value=BRUSH_SIZE; document.getElementById('size-val').textContent=BRUSH_SIZE; break;
+      case '[': {
+        BRUSH_SIZE = Math.max(1, BRUSH_SIZE - 2);
+        document.getElementById('size-slider').value = BRUSH_SIZE;
+        document.getElementById('size-val').textContent = BRUSH_SIZE;
+        break;
+      }
+      case ']': {
+        BRUSH_SIZE = Math.min(80, BRUSH_SIZE + 2);
+        document.getElementById('size-slider').value = BRUSH_SIZE;
+        document.getElementById('size-val').textContent = BRUSH_SIZE;
+        break;
+      }
+      case 'delete':
+      case 'backspace':
+        clearCanvas();
+        break;
     }
   });
 }
 
 // ═══════════════════════════════════════════════════════════
-// UI HELPERS
+// UI NOTIFICATIONS & STATUS BAR
 // ═══════════════════════════════════════════════════════════
-let toastTimer = null;
-function showToast(msg) {
-  const el = document.getElementById('toast');
-  el.textContent = msg;
-  el.classList.add('visible');
-  if (toastTimer) clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => el.classList.remove('visible'), 2500);
+let toastTimeoutId = null;
+
+function showToast(message) {
+  const toast = document.getElementById('toast');
+  if (!toast) return;
+  toast.textContent = message;
+  toast.classList.add('visible');
+  if (toastTimeoutId) clearTimeout(toastTimeoutId);
+  toastTimeoutId = setTimeout(() => {
+    toast.classList.remove('visible');
+  }, 2500);
 }
 
 function setTrackerStatus(text, icon) {
-  document.getElementById('tracker-text').textContent = text;
-  document.getElementById('tracker-icon').textContent = icon;
+  const t = document.getElementById('tracker-text');
+  const i = document.getElementById('tracker-icon');
+  if (t) t.textContent = text;
+  if (i) i.textContent = icon;
 }
